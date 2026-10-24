@@ -126,7 +126,7 @@ export function ModelMenuList({
 							<span className="flex items-center justify-between gap-2">
 								<span className="truncate text-card-foreground">{m.name}</span>
 								<span className="shrink-0 tabular-nums text-muted-foreground" title={m.provider === "github-copilot" ? COPILOT_COST_NOTE : "USD per 1M tokens in/out"}>
-									{m.provider === "github-copilot" ? "—" : priceLabel(m.cost)}
+									{m.provider === "github-copilot" ? "—" : m.provider === "chatgpt" ? "ChatGPT plan" : priceLabel(m.cost)}
 								</span>
 							</span>
 							<span className="flex items-center justify-between gap-2 text-muted-foreground">

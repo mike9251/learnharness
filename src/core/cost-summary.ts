@@ -18,10 +18,12 @@
  */
 
 import type { CallUsage, EmissionStats, ExtractionRunUsage } from "./contracts.ts";
-import { callCost, sumSteps } from "./prices.ts";
+import { callCost, sumSteps, isChatGPTPlan } from "./prices.ts";
 
 /** One pipeline stage's cumulative cost across every run. */
 export interface StageCost {
+	/** ChatGPT plan stage-runs, excluded from API dollars and unpriced counts. */
+	subscriptionRuns?: number;
 	/** Inferred USD summed over PRICED runs (partial when unpricedRuns > 0). */
 	dollars: number;
 	/** Stage-runs whose model is missing from PRICES (render "—", never zero). */
@@ -34,6 +36,7 @@ export interface StageCost {
 
 /** One run in the recent-runs list (extraction or naming). */
 export interface RecentRun {
+	subscriptionRuns?: number;
 	startedAt: number;
 	/** ISO wall-clock. */
 	at: string;
@@ -55,9 +58,10 @@ export interface RecentRun {
 export interface GraphCostSummary {
 	/** Includes Copilot subscription usage (including runs outside the recent cap). */
 	copilotUsage?: boolean;
+	subscriptionRuns?: number;
 	/** Inferred USD across all priced stages of all runs. */
 	totalDollars: number;
-	/** Runs where EVERY stage was unpriced (totalDollars excludes them). */
+	/** Runs with no priced API stage and at least one unknown stage. */
 	unpricedRuns: number;
 	/** The billable pipeline stages. (Wave 7, owner ruling 2026-09-23:
 	 *  the embedding stage is gone with the provider embedder; the
@@ -94,7 +98,7 @@ const emptyStage = (): StageCost => ({ dollars: 0, unpricedRuns: 0, runs: 0, tok
  *  (all-or-nothing: a stage runs one model). */
 function stageDollars(model: string, steps: readonly CallUsage[]): number | null {
 	// Empty/aborted subscription stages are unavailable too, not free.
-	if (model.startsWith("github-copilot:")) return null;
+	if (model.startsWith("github-copilot:") || isChatGPTPlan(model)) return null;
 	let total = 0;
 	for (const step of steps) {
 		const c = callCost(step, model);
@@ -127,13 +131,15 @@ export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 		extraction.runs++;
 		mergeTokens(extraction.tokens, stages.extractor.steps);
 		const extDollars = stageDollars(stages.extractor.model, stages.extractor.steps);
-		if (extDollars === null) extraction.unpricedRuns++;
+		if (isChatGPTPlan(stages.extractor.model)) extraction.subscriptionRuns = (extraction.subscriptionRuns ?? 0) + 1;
+		else if (extDollars === null) extraction.unpricedRuns++;
 		else extraction.dollars += extDollars;
 
 		audit.runs++;
 		mergeTokens(audit.tokens, stages.auditor.steps);
 		const audDollars = stageDollars(stages.auditor.model, stages.auditor.steps);
-		if (audDollars === null) audit.unpricedRuns++;
+		if (isChatGPTPlan(stages.auditor.model)) audit.subscriptionRuns = (audit.subscriptionRuns ?? 0) + 1;
+		else if (audDollars === null) audit.unpricedRuns++;
 		else audit.dollars += audDollars;
 
 		// Run-level: null only when EVERY stage is unpriced.
@@ -141,8 +147,10 @@ export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 		const runDollars = allStages.every((d) => d === null)
 			? null
 			: allStages.reduce<number>((a, d) => a + (d ?? 0), 0);
+		const subscriptionRuns = [stages.extractor, stages.auditor].filter((stage) => isChatGPTPlan(stage.model)).length;
 		const allSteps = [...stages.extractor.steps, ...stages.auditor.steps];
 		runs.push({
+			...(subscriptionRuns ? { subscriptionRuns } : {}),
 			startedAt: run.startedAt,
 			at: run.at,
 			durationMs: run.durationMs,
@@ -167,9 +175,11 @@ export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 	const capped = runs.slice(0, input.recentCap ?? 10);
 
 	// A run is "unpriced" when it billed nothing countable at all.
-	const unpricedRuns = runs.filter((r) => r.dollars === null).length;
+	const unpricedRuns = runs.filter((r) => r.dollars === null && (r.subscriptionRuns ?? 0) < 2).length;
+	const subscriptionRuns = (extraction.subscriptionRuns ?? 0) + (audit.subscriptionRuns ?? 0);
 	return {
 		...(runs.some((run) => run.copilotUsage) ? { copilotUsage: true } : {}),
+		...(subscriptionRuns ? { subscriptionRuns } : {}),
 		totalDollars: extraction.dollars + audit.dollars,
 		unpricedRuns,
 		stages: { extraction, audit },

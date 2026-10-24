@@ -84,8 +84,12 @@ describe("SetupKeysBody — stage 1's self-contained first-key screen", () => {
 			createElement(SetupKeysBody, { ...base, providers: PROVIDERS, provider: null }),
 		);
 		assert.match(html, /Connect a provider\./);
-		assert.ok(html.includes("Add an API key or connect GitHub Copilot. You’ll pick your models next."));
-		assert.ok(html.includes("copilot-connection"));
+		assert.ok(html.includes("Add an API key or connect GitHub Copilot or ChatGPT. You’ll pick your models next."));
+		assert.ok(html.includes('data-testid="copilot-connection"'));
+		assert.ok(html.includes('data-testid="chatgpt-login"'));
+		assert.ok(html.indexOf('data-testid="setup-key-provider"') < html.indexOf('data-testid="copilot-connection"'), "API keys precede Copilot");
+		assert.ok(html.indexOf('data-testid="copilot-connection"') < html.indexOf('data-testid="chatgpt-login"'), "Copilot precedes ChatGPT");
+		assert.doesNotMatch(html, /chatgpt-privacy-notice|OpenAI privacy|Manage usage/);
 		assert.doesNotMatch(html, /First, add|keys unlock|—/);
 		assert.ok(html.includes('data-testid="setup-key-provider"'));
 		assert.ok(html.includes("Pick a provider…"));

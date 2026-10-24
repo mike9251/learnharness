@@ -20,6 +20,15 @@
 import { clampThinkingLevel, getSupportedThinkingLevels, type Api, type Model } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { piModels } from "../agent/models.ts";
+import { chatGPTConnected, chatGPTModel, chatGPTModels, refreshChatGPTModels } from "../agent/chatgpt-bridge.ts";
+
+export async function refreshConnectionCatalog(): Promise<void> {
+	await refreshChatGPTModels(piModels().getModels("openai").filter((m): m is Model<"openai-responses"> => m.api === "openai-responses"));
+}
+function connectionModel(provider: string, id: string): Model<Api> | undefined {
+	return provider === "chatgpt" ? chatGPTModel(id) : piModels().getModel(provider, id);
+}
+function connectionProviderIds(): string[] { return [...piModels().getProviders().map((p) => p.id), "chatgpt"]; }
 import { settingsStore } from "../store/settings.ts";
 import { effectiveSettings } from "./stores.ts";
 import { keyValue } from "./keys.ts";
@@ -129,6 +138,7 @@ export function catalogProviders(): CatalogProvider[] {
 			keyPresent: keyValue(p.envVar) !== undefined,
 		})),
 		{ id: COPILOT_PROVIDER, keyPresent: copilotStatus().connected },
+		{ id: "chatgpt", envVar: "", keyPresent: chatGPTConnected() },
 	].sort((a, b) => a.id.localeCompare(b.id));
 }
 
@@ -175,6 +185,7 @@ export function catalogContextLimits(): Map<string, number> {
 			index.set(`${provider.id}:${model.id}`, model.contextWindow);
 		}
 	}
+	for (const model of chatGPTModels()) index.set(`chatgpt:${model.id}`, model.contextWindow);
 	return index;
 }
 
@@ -189,7 +200,8 @@ export function modelCatalog(): ModelCatalogResponse {
 		.filter((p) => keyed.has(p.id))
 		.flatMap((p) => p.id === COPILOT_PROVIDER ? copilotModels() : piModels().getModels(p.id))
 		.map(toModelDto)
-		.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
+		.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)))
+		.concat(chatGPTModels().map(toModelDto));
 	return {
 		models,
 		defaults: catalogDefaults(),
@@ -211,13 +223,13 @@ export type SettingsValidation =
  *    the model the picker writes against (settings.model, else config's
  *    prober/teacher pin; one controller, so the two specs share it). */
 export function validateChatSettings(settings: ChatSettings): SettingsValidation {
-	const providers = piModels().getProviders().map((p) => p.id);
+	const providers = connectionProviderIds();
 	if (settings.model) {
 		const { provider, id } = settings.model;
 		if (!providers.includes(provider)) {
 			return { ok: false, error: `Unknown provider "${provider}" — configured: ${providers.join(", ")}` };
 		}
-		if (!piModels().getModel(provider, id)) {
+		if (!connectionModel(provider, id)) {
 			return { ok: false, error: `No model "${id}" in the ${provider} catalog` };
 		}
 	}
@@ -241,13 +253,13 @@ export function validateModelsSettings(settings: ModelsSettings): SettingsValida
 }
 
 function validateSlotSpec(name: ModelSlotName, slot: { model?: { provider: string; id: string }; thinkingLevel?: ThinkingLevel }): SettingsValidation {
-	const providers = piModels().getProviders().map((p) => p.id);
+	const providers = connectionProviderIds();
 	if (slot.model) {
 		const { provider, id } = slot.model;
 		if (!providers.includes(provider)) {
 			return { ok: false, error: `Unknown provider "${provider}" — configured: ${providers.join(", ")}` };
 		}
-		if (!piModels().getModel(provider, id)) {
+		if (!connectionModel(provider, id)) {
 			return { ok: false, error: `No model "${id}" in the ${provider} catalog` };
 		}
 	}
@@ -269,7 +281,7 @@ function validateSlotSpec(name: ModelSlotName, slot: { model?: { provider: strin
  *  or the level already supported — the existence gate rejects unknown
  *  models separately, so this only ever sees real ones in practice). */
 function clampLevelFor(provider: string, id: string, level: ThinkingLevel): ThinkingLevel {
-	const model = piModels().getModel(provider, id);
+	const model = connectionModel(provider, id);
 	return model ? clampThinkingLevel(model, level) : level;
 }
 

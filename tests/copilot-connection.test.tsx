@@ -275,7 +275,9 @@ describe("Copilot setup and settings integration", () => {
 	it("Keys settings has a separate connection row, not an API-key dropdown entry", async () => {
 		handler = (path) => path === "/api/keys" ? Response.json({ keys: [], providers: [] }) : Response.json({ connected: false });
 		await mount(<KeysSection />);
-		assert.ok(document.querySelector('[data-testid="group-provider-keys"] [data-testid="copilot-connection"]'));
+		assert.ok(document.querySelector('[data-testid="group-subscriptions"] [data-testid="copilot-connection"]'));
+		assert.ok(document.querySelector('[data-testid="group-subscriptions"] [data-testid="chatgpt-connection"]'));
+		assert.equal(document.querySelector('[data-testid="group-provider-keys"] [data-testid="copilot-connection"]'), null);
 		button("Connect"); button("+ Add provider key");
 		assert.equal(document.querySelector('[data-testid="key-github-copilot-editor"]'), null);
 	});
@@ -327,7 +329,10 @@ describe("Copilot setup and settings integration", () => {
 
 	it("useZeroKeys follows Copilot-only connection and disconnection signals", async () => {
 		let connected = true;
-		handler = () => Response.json({ keys: [], providers: [], copilot: { connected } });
+		handler = (path) => {
+			assert.equal(path, "/api/models");
+			return Response.json({ models: [], providers: [{ id: "github-copilot", keyPresent: connected }] });
+		};
 		function Probe() { return <span data-testid="zero">{String(useZeroKeys())}</span>; }
 		await mount(<Probe />);
 		assert.equal(document.querySelector('[data-testid="zero"]')?.textContent, "false");
@@ -337,5 +342,28 @@ describe("Copilot setup and settings integration", () => {
 		connected = true;
 		await act(async () => { notifySettingsSaved("keys"); });
 		assert.equal(document.querySelector('[data-testid="zero"]')?.textContent, "false");
+	});
+
+	it("useZeroKeys admits either subscription or an API key independently", async () => {
+		let providers: { id: string; keyPresent: boolean }[] = [];
+		handler = (path) => {
+			assert.equal(path, "/api/models");
+			return Response.json({ models: [], providers });
+		};
+		function Probe() { return <span data-testid="zero">{String(useZeroKeys())}</span>; }
+		await mount(<Probe />);
+		for (const copilot of [false, true]) {
+			for (const chatgpt of [false, true]) {
+				for (const apiKey of [false, true]) {
+					providers = [
+						{ id: "github-copilot", keyPresent: copilot },
+						{ id: "chatgpt", keyPresent: chatgpt },
+						{ id: "anthropic", keyPresent: apiKey },
+					];
+					await act(async () => { notifySettingsSaved("keys"); });
+					assert.equal(document.querySelector('[data-testid="zero"]')?.textContent, String(!(copilot || chatgpt || apiKey)));
+				}
+			}
+		}
 	});
 });

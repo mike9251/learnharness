@@ -294,8 +294,16 @@ function timeAgo(startedAt: number): string {
 
 /** Run/stage cost at 3 decimals (pipeline pennies are real money at this
  *  scale); headline totals use 2. Null (unpriced model) renders "—". */
-function fmtRunCost(dollars: number | null): string {
+function fmtRunCost(dollars: number | null, subscription = false): string {
+	if (subscription) return dollars === null ? "ChatGPT plan" : `$${dollars.toFixed(3)} API + ChatGPT plan`;
 	return dollars === null ? "—" : `$${dollars.toFixed(3)}`;
+}
+function graphUsageLabel(costs: Pick<GraphCostSummary, "stages" | "copilotUsage">): string {
+	const stages = [costs.stages.extraction, costs.stages.audit];
+	const plan = stages.some((stage) => (stage.subscriptionRuns ?? 0) > 0);
+	const priced = stages.some((stage) => stage.runs - stage.unpricedRuns - (stage.subscriptionRuns ?? 0) > 0);
+	const dollars = displayCostTotals(costs).totalDollars;
+	return plan ? (priced ? `$${dollars.toFixed(2)} API + ChatGPT plan` : "ChatGPT plan") : costs.copilotUsage && !priced ? "—" : `$${dollars.toFixed(2)}`;
 }
 
 /**
@@ -319,13 +327,6 @@ export function displayCostTotals(costs: Pick<GraphCostSummary, "stages">): {
 	};
 }
 
-/** Keep Copilot-only totals unavailable while preserving priced subtotals. */
-function graphCostLabel(costs: GraphCostSummary): string {
-	const { totalDollars, unpricedRuns } = displayCostTotals(costs);
-	const runs = costs.stages.extraction.runs + costs.stages.audit.runs;
-	return costs.copilotUsage && runs === unpricedRuns ? "—" : `$${totalDollars.toFixed(2)}`;
-}
-
 /**
  * The graph-pipeline cost control (2026-09-20 placement wave): a bare
  * cumulative-dollars number — no pill chrome (owner: "just a number"),
@@ -337,7 +338,7 @@ function graphCostLabel(costs: GraphCostSummary): string {
  * 2026-10-06): the same bare cumulative-dollars pill + panel. */
 export function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 	const [open, setOpen] = useState(false);
-	const costLabel = graphCostLabel(costs);
+	const costLabel = graphUsageLabel(costs);
 	// Click anywhere outside (or Escape) closes the panel — the root
 	// wraps button + panel, so the toggle itself keeps working.
 	const rootRef = useRef<HTMLDivElement>(null);
@@ -394,7 +395,7 @@ export function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 					Graph pipeline costs
 				</span>
 				<span className="text-foreground tabular-nums">
-					{graphCostLabel(costs)}
+					{graphUsageLabel(costs)}
 					{unpricedRuns > 0 && (
 						<span className="text-muted-foreground"> · {unpricedRuns} unpriced</span>
 					)}
@@ -406,8 +407,8 @@ export function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 					<div key={label} className="flex items-baseline justify-between gap-2 text-[11px]">
 						<span className="shrink-0 text-muted-foreground">{label}</span>
 						<span className="min-w-0 text-right tabular-nums">
-							{fmtRunCost(stage.runs === stage.unpricedRuns ? null : stage.dollars)}
-							{stage.unpricedRuns > 0 && stage.runs > stage.unpricedRuns && (
+							{fmtRunCost(stage.runs - stage.unpricedRuns - (stage.subscriptionRuns ?? 0) <= 0 ? null : stage.dollars, (stage.subscriptionRuns ?? 0) > 0)}
+							{stage.unpricedRuns > 0 && (stage.runs - stage.unpricedRuns - (stage.subscriptionRuns ?? 0) > 0 || (stage.subscriptionRuns ?? 0) > 0) && (
 								<span className="text-muted-foreground"> +{stage.unpricedRuns} unpriced</span>
 							)}
 							<span className="text-muted-foreground">
@@ -432,7 +433,7 @@ export function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 								)}
 							</span>
 							<span className="shrink-0 tabular-nums" title={run.copilotUsage ? COPILOT_COST_NOTE : undefined}>
-								{fmtRunCost(run.dollars)}{run.copilotUsage && run.dollars !== null ? " + unpriced" : ""}
+								{fmtRunCost(run.dollars, (run.subscriptionRuns ?? 0) > 0)}{run.dollars === null && run.subscriptionRuns === 1 ? " +1 unpriced" : run.copilotUsage && run.dollars !== null ? " + unpriced" : ""}
 							</span>
 						</div>
 					))}

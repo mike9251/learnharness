@@ -83,12 +83,13 @@ export function StatsBar({
 	const { catalog } = useModelCatalog();
 	const limits = useMemo(() => (catalog ? catalogLimits(catalog) : undefined), [catalog]);
 	const ctx = contextWindow({ turns }, limits);
-	const { cost, unpriced } = sessionCost({ turns });
+	const { cost, unpriced, subscription = 0 } = sessionCost({ turns });
 	// Honest cost: show dollars only when at least one turn priced;
 	// otherwise "—" (never a fake $0.0000).
-	const pricedCount = turns.length - unpriced;
+	const pricedCount = turns.length - unpriced - subscription;
 	const copilotUsage = turns.some((turn) => turn.model.startsWith("github-copilot:"));
-	const costLabel = pricedCount > 0 ? `${formatUsd(cost)}${copilotUsage ? " + unpriced" : ""}` : "—";
+	const usageLabel = subscription ? (pricedCount > 0 ? `${formatUsd(cost)} API + ChatGPT plan` : "ChatGPT plan") : pricedCount > 0 ? formatUsd(cost) : "—";
+	const costLabel = `${usageLabel}${copilotUsage && (pricedCount > 0 || subscription > 0) ? " + unpriced" : ""}`;
 	const lastModel = turns.at(-1)?.model;
 
 	return (
@@ -144,9 +145,10 @@ export function StatsBar({
 								</span>
 							</div>
 							<div className="flex justify-between gap-2">
-								<span>Total cost</span>
+								<span>{subscription ? "Usage" : "Total cost"}</span>
 								<span className="tabular-nums text-card-foreground">{costLabel}</span>
 							</div>
+							{subscription > 0 && <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noreferrer" className="underline underline-offset-2">Manage ChatGPT usage</a>}
 							{unpriced > 0 && (
 								<div className="flex justify-between gap-2">
 									<span>Unpriced turns</span>
@@ -170,7 +172,7 @@ export function StatsBar({
 												</span>
 												<span className="flex shrink-0 items-center gap-2 tabular-nums text-card-foreground">
 													<span className="text-muted-foreground">{turn.steps.length} steps</span>
-													<span>{c === null ? "—" : formatUsd(c)}</span>
+													<span>{turn.model.startsWith("chatgpt:") ? "ChatGPT plan" : c === null ? "—" : formatUsd(c)}</span>
 												</span>
 											</li>
 										);

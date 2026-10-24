@@ -53,6 +53,7 @@ import {
 } from "../core/auth-keys.ts";
 import { authStore } from "../store/auth.ts";
 import { COPILOT_PROVIDER, copilotStatus } from "./copilot.ts";
+import { chatGPTConnected } from "../agent/chatgpt-bridge.ts";
 
 // The once-per-process boot record — globalThis anchor (HMR re-imports the
 // module; the snapshot must not re-run and misread fill-gapped vars as real
@@ -198,13 +199,14 @@ export function keyValue(id: string): string | undefined {
  * 2026-09-25): would this provider's key be present at request time?
  * Reads through keyValue — the SAME env-first lookup pi-ai performs
  * natively at every request — so an env-shadowed key counts as present
- * (gate by what would run). Providers absent from AUTH_PROVIDER_KEYS take
- * no key at all: nothing to gate, present by definition. Copilot is the
- * exception: it requires a saved OAuth connection, never an ambient token. */
+ * (gate by what would run). Copilot requires a saved OAuth connection,
+ * never an ambient token; ChatGPT requires a connected desktop account.
+ * Providers without a supported auth path are not configured. */
 export function providerKeyPresent(provider: string): boolean {
 	if (provider === COPILOT_PROVIDER) return copilotStatus().connected;
+	if (provider === "chatgpt") return chatGPTConnected();
 	const info = AUTH_PROVIDER_KEYS.find((p) => p.id === provider);
-	return info ? keyValue(info.envVar) !== undefined : true;
+	return info ? keyValue(info.envVar) !== undefined : false;
 }
 
 /**
