@@ -19,6 +19,11 @@
  *                             needed — the 10s NET-0001 timeout only bites
  *                             a stream that stops SENDING).
  *
+ * Stop/drain protocol: the main thread sends { type: "stop", requestId }.
+ * Capture stops, any partial frame is emitted, then { type: "stopped",
+ * requestId } acknowledges the drain. Port message ordering keeps every
+ * audio frame before the acknowledgment. Repeated stops only acknowledge.
+ *
  * Ships as a static file under public/ so it rides the standalone bundle.
  * Plain JS by necessity (worklets run outside the module graph).
  */
@@ -27,9 +32,25 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
 		super();
 		this.frame = new Int16Array(2048);
 		this.count = 0;
+		this.stopped = false;
+		this.port.onmessage = (event) => {
+			const message = event.data;
+			if (message?.type !== "stop") return;
+			if (!this.stopped) {
+				this.stopped = true;
+				if (this.count > 0) {
+					// Transfer only captured samples, never the unused zero tail.
+					const tail = this.frame.slice(0, this.count);
+					this.count = 0;
+					this.port.postMessage({ type: "audio", buffer: tail }, [tail.buffer]);
+				}
+			}
+			this.port.postMessage({ type: "stopped", requestId: message.requestId });
+		};
 	}
 
 	process(inputs) {
+		if (this.stopped) return true;
 		const channel = inputs[0] && inputs[0][0];
 		if (!channel) return true; // no input yet — stay alive
 

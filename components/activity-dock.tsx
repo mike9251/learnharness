@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { ActivityIcon, BotIcon, FileTextIcon, PenToolIcon, PlayIcon, SearchIcon, SquareIcon, WaypointsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { CallUsage, JobKind, JobRecord } from "@/src/core";
-import { isModelsRefusal, isProviderKeyRefusal, jobCost } from "@/src/core";
+import { COPILOT_COST_NOTE, isModelsRefusal, isProviderKeyRefusal, jobCost } from "@/src/core";
 import { formatTokens, formatUsd } from "@/components/usage-format";
 import { useServerEvent, useServerResync } from "@/components/server-events";
 
@@ -298,6 +298,7 @@ export function ActivitySection({ feed: feedProp }: { feed?: ActivityFeed }) {
 	const abortRef = useRef({ blobs, refresh, setAbortStates });
 	abortRef.current = { blobs, refresh, setAbortStates };
 
+	const copilotUsage = blobs.some((blob) => blob.model?.startsWith("github-copilot:"));
 	const totalCost = useMemo(() => {
 		const priced = blobs.map((b) => b.cost).filter((c): c is number => c !== null);
 		return priced.length === 0 ? null : priced.reduce((a, c) => a + c, 0);
@@ -347,8 +348,8 @@ export function ActivitySection({ feed: feedProp }: { feed?: ActivityFeed }) {
 				<ActivityIcon className="size-3" />
 				Background agents
 				{blobs.length > 0 && (
-					<span className="ml-auto tabular-nums" data-testid="activity-total-cost" title="Total running cost (inferred)">
-						{totalCost === null ? "—" : formatUsd(totalCost)}
+					<span className="ml-auto tabular-nums" data-testid="activity-total-cost" title={copilotUsage ? COPILOT_COST_NOTE : "Total running cost (inferred)"}>
+						{totalCost === null ? "—" : `${formatUsd(totalCost)}${copilotUsage ? " + unpriced" : ""}`}
 				</span>
 				)}
 			</div>
@@ -423,7 +424,7 @@ function ActivityBlobRow({
 					)}
 				</span>
 				<span className="flex shrink-0 items-center gap-2 tabular-nums text-muted-foreground">
-					<span data-testid="activity-blob-cost">{blob.cost === null ? "—" : formatUsd(blob.cost)}</span>
+					<span data-testid="activity-blob-cost" title={blob.model?.startsWith("github-copilot:") ? COPILOT_COST_NOTE : undefined}>{blob.cost === null ? "—" : formatUsd(blob.cost)}</span>
 					<span data-testid="activity-blob-elapsed">{formatElapsed(now - blob.startedAt)}</span>
 				</span>
 			</button>
@@ -465,6 +466,7 @@ function ActivityBlobRow({
 								{blob.cost === null ? "—" : formatUsd(blob.cost)}
 							</span>
 						</div>
+						{blob.model?.startsWith("github-copilot:") && <p>{COPILOT_COST_NOTE}</p>}
 						<div className="flex justify-between gap-2">
 							<span>Context</span>
 							<span className="tabular-nums text-card-foreground" data-testid="activity-blob-context">

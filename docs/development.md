@@ -46,7 +46,15 @@ Secrets and machine-specific paths only. Model choice and thinking budgets are t
 | `DEEPGRAM_API_KEY` | optional — dictation (STT token minting; audio streams browser→Deepgram, never through the server) |
 | `CHROME_PATH` | optional system Chrome fallback for demo verification; the app's own browser helper is primary (nothing is downloaded) |
 
-The packaged desktop app takes keys from `userData/auth.json` (BYOK, mode 0600, read/written directly by the server via `LH_AUTH_FILE`). PDFs render natively with pdfjs/Skia; SVGs use resvg.
+The packaged desktop app takes keys from `userData/auth.json` (BYOK, mode 0600, read/written directly by the server via `LH_AUTH_FILE`). GitHub Copilot OAuth credentials live separately in `oauth.json` **beside that file** (also mode 0600), so dev/fresh/desktop profiles remain isolated without migrating the flat API-key map. The server injects this credential store into pi-ai for Copilot only; existing API-key precedence is unchanged. No credentials are imported from a pi installation. Copilot’s ambient `COPILOT_GITHUB_TOKEN` is deliberately not used by LearnHarness.
+
+The Copilot login endpoints (`/api/auth/github-copilot` and its `/login` routes) expose only connection/device-code status, never tokens. Login attempts are installation-local, cancellable, capability-addressed, and limited to 15 minutes or the device-code expiry, whichever comes first. Expired access tokens refresh through pi-ai under a filesystem lock; the picker uses the saved account model-availability metadata. Settings reads do not make GitHub calls.
+
+OAuth writes are atomic and serialize across processes using `oauth.json.lock`. A crash can leave an orphan lock; after confirming **all LearnHarness server processes are stopped**, remove that lock directory before restarting. Never delete a lock held by an active writer. Malformed credential files fail closed rather than being overwritten.
+
+The OAuth file, temporary files, and lock must never ship in desktop payloads. `next.config.ts` excludes them and explicitly includes pi-ai’s lazy OAuth runtime; `scripts/build-server.mjs` rejects leaked secrets or a missing Copilot runtime. After building and curating the standalone payload, `node scripts/smoke-copilot.mjs` tests device login, cancellation, filtering, and disconnect against mocked GitHub endpoints and disposable credentials, without a real GitHub account.
+
+PDFs render natively with pdfjs/Skia; SVGs use resvg.
 
 ## Architecture
 

@@ -67,7 +67,7 @@ import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, use
 import { NotesImportErrors, useNotesImport } from "@/components/notes-import.tsx";
 import Link from "next/link";
 import { FileTextIcon, ListTreeIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
-import { incrementalLayout, propositionSessionHref, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
+import { COPILOT_COST_NOTE, incrementalLayout, propositionSessionHref, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
 import { useActivity } from "@/components/activity-dock";
@@ -319,6 +319,13 @@ export function displayCostTotals(costs: Pick<GraphCostSummary, "stages">): {
 	};
 }
 
+/** Keep Copilot-only totals unavailable while preserving priced subtotals. */
+function graphCostLabel(costs: GraphCostSummary): string {
+	const { totalDollars, unpricedRuns } = displayCostTotals(costs);
+	const runs = costs.stages.extraction.runs + costs.stages.audit.runs;
+	return costs.copilotUsage && runs === unpricedRuns ? "—" : `$${totalDollars.toFixed(2)}`;
+}
+
 /**
  * The graph-pipeline cost control (2026-09-20 placement wave): a bare
  * cumulative-dollars number — no pill chrome (owner: "just a number"),
@@ -330,6 +337,7 @@ export function displayCostTotals(costs: Pick<GraphCostSummary, "stages">): {
  * 2026-10-06): the same bare cumulative-dollars pill + panel. */
 export function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 	const [open, setOpen] = useState(false);
+	const costLabel = graphCostLabel(costs);
 	// Click anywhere outside (or Escape) closes the panel — the root
 	// wraps button + panel, so the toggle itself keeps working.
 	const rootRef = useRef<HTMLDivElement>(null);
@@ -338,7 +346,7 @@ export function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 		<div ref={rootRef} className="relative">
 			<Hint
 				// Trimmed (owner, subtlety round 2026-09-25).
-				label="Graph costs — click for details"
+				label={costs.copilotUsage ? COPILOT_COST_NOTE : "Graph costs — click for details"}
 				side="bottom"
 			>
 				<button
@@ -349,7 +357,7 @@ export function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
 					open ? "text-foreground" : "text-muted-foreground hover:text-foreground"
 				}`}
 			>
-				${displayCostTotals(costs).totalDollars.toFixed(2)}
+				<span title={costs.copilotUsage ? COPILOT_COST_NOTE : undefined}>{costLabel}{costs.copilotUsage && costLabel !== "—" ? " + unpriced" : ""}</span>
 			</button>
 			</Hint>
 			{open && (
@@ -371,14 +379,14 @@ export function GraphCostControl({ costs }: { costs: GraphCostSummary }) {
  * not tracked anymore — the headline sums the displayed stages only and
  * naming-kind runs never reach the list.
  */
-function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
+export function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 	const stageRows: [string, GraphCostSummary["stages"]["extraction"]][] = [
 		["Extraction", costs.stages.extraction],
 		["Audit", costs.stages.audit],
 	];
 	// The displayed figures come from displayCostTotals (naming excluded —
 	// the pill and this panel must agree).
-	const { totalDollars, unpricedRuns } = displayCostTotals(costs);
+	const { unpricedRuns } = displayCostTotals(costs);
 	return (
 		<div className="w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border bg-card/95 p-3 text-xs shadow-lg backdrop-blur">
 			<div className="mb-2 flex items-baseline justify-between">
@@ -386,19 +394,20 @@ function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 					Graph pipeline costs
 				</span>
 				<span className="text-foreground tabular-nums">
-					${totalDollars.toFixed(2)}
+					{graphCostLabel(costs)}
 					{unpricedRuns > 0 && (
 						<span className="text-muted-foreground"> · {unpricedRuns} unpriced</span>
 					)}
 				</span>
 			</div>
+			{costs.copilotUsage && <p className="mb-2 text-muted-foreground">{COPILOT_COST_NOTE}</p>}
 			<div className="flex flex-col gap-1">
 				{stageRows.map(([label, stage]) => (
 					<div key={label} className="flex items-baseline justify-between gap-2 text-[11px]">
 						<span className="shrink-0 text-muted-foreground">{label}</span>
 						<span className="min-w-0 text-right tabular-nums">
-							{fmtRunCost(stage.runs === 0 || (stage.unpricedRuns > 0 && stage.dollars === 0) ? null : stage.dollars)}
-							{stage.unpricedRuns > 0 && stage.dollars > 0 && (
+							{fmtRunCost(stage.runs === stage.unpricedRuns ? null : stage.dollars)}
+							{stage.unpricedRuns > 0 && stage.runs > stage.unpricedRuns && (
 								<span className="text-muted-foreground"> +{stage.unpricedRuns} unpriced</span>
 							)}
 							<span className="text-muted-foreground">
@@ -422,7 +431,9 @@ function GraphCostPanel({ costs }: { costs: GraphCostSummary }) {
 									</span>
 								)}
 							</span>
-							<span className="shrink-0 tabular-nums">{fmtRunCost(run.dollars)}</span>
+							<span className="shrink-0 tabular-nums" title={run.copilotUsage ? COPILOT_COST_NOTE : undefined}>
+								{fmtRunCost(run.dollars)}{run.copilotUsage && run.dollars !== null ? " + unpriced" : ""}
+							</span>
 						</div>
 					))}
 			</div>

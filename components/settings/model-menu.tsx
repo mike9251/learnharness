@@ -21,7 +21,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ModelCatalogEntry } from "@/src/core";
-import { fuzzyScore } from "@/src/core";
+import { COPILOT_COST_NOTE, fuzzyScore } from "@/src/core";
 import { formatTokens } from "@/components/usage-format";
 
 function priceLabel(cost: ModelCatalogEntry["cost"]): string {
@@ -125,8 +125,8 @@ export function ModelMenuList({
 						>
 							<span className="flex items-center justify-between gap-2">
 								<span className="truncate text-card-foreground">{m.name}</span>
-								<span className="shrink-0 tabular-nums text-muted-foreground" title="USD per 1M tokens in/out">
-									{priceLabel(m.cost)}
+								<span className="shrink-0 tabular-nums text-muted-foreground" title={m.provider === "github-copilot" ? COPILOT_COST_NOTE : "USD per 1M tokens in/out"}>
+									{m.provider === "github-copilot" ? "—" : priceLabel(m.cost)}
 								</span>
 							</span>
 							<span className="flex items-center justify-between gap-2 text-muted-foreground">

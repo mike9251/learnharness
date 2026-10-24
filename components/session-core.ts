@@ -252,7 +252,7 @@ export class SessionModel {
 	getState(): SessionState {
 		const live =
 			this.statusValue === "submitted" || this.statusValue === "streaming"
-				? { executions: this.executions, inFlight: true, streamingIds: this.streamingIds }
+				? { executions: this.executions, inFlight: true, streamingIds: this.streamingIds, activeMessageId: this.streamingMessageId }
 				: undefined;
 		return {
 			messages: projectView([...this.base, ...this.tail], live),
@@ -364,6 +364,10 @@ export class SessionModel {
 				// the wire) still wins.
 				const id = message.id ?? this.streamingMessageId ?? localId();
 				const withId = { ...message, id } as LhMessage;
+				// Clear activity BEFORE notifying views of the final snapshot.
+				// streamingIds intentionally retains tool ownership across steps;
+				// it must not keep old empty reasoning items looking active.
+				if (agent.type === "message_end") this.streamingMessageId = null;
 				if (agent.type === "message_start") {
 					this.streamingMessageId = id;
 					this.streamingIds.add(id);
@@ -377,8 +381,6 @@ export class SessionModel {
 					});
 				}
 				if (agent.type === "message_end") {
-					this.streamingMessageId = null; // slot done — next start mints fresh
-					// (fallthrough: returns true below — the message landed)
 					const stop = (message as { stopReason?: string }).stopReason;
 					if (stop === "error") {
 						// Provider error, verbatim (owner ruling) — the record
@@ -446,6 +448,7 @@ export class SessionModel {
 				}
 			}
 		} finally {
+			this.streamingMessageId = null;
 			this.streamingIds = new Set();
 			this.executions = new Map();
 			if (this.statusValue !== "error") this.setStatus("ready");

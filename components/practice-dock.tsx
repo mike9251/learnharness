@@ -6,6 +6,7 @@ import { MessageResponse } from "@/components/ai-elements/message";
 import { Button } from "@/components/ui/button";
 import { joinDictation, useDictationTarget } from "@/components/dictation";
 import { useEnterSubmits } from "@/components/enter-submits";
+import { useDockHeight } from "@/components/use-dock-height";
 import { cn } from "@/lib/utils";
 import { repairMathForDisplay } from "@/src/core";
 
@@ -55,6 +56,7 @@ export function PracticeDock({ problemCallId, input, expanded, onExpand, onSubmi
 	// discipline): a submit resuming after `await finishDictation()` reads
 	// the tail, never a stale closure.
 	const thinkingRef = useRef("");
+	const { rootRef, scrollRef, surfaceStyle } = useDockHeight(expanded, "40vh");
 
 	useDictationTarget(
 		useCallback(
@@ -101,12 +103,10 @@ export function PracticeDock({ problemCallId, input, expanded, onExpand, onSubmi
 
 	/* ── the expanded form ── */
 	return (
-		<div data-testid="practice-dock" data-problem={problemCallId}>
-			{/* The agent's half: the 'Problem' eyebrow (mirroring the quiz
-			    cards' label row — owner round, 2026-10-05) + the statement,
-			    markdown + LaTeX rendered, capped by the measured column
-			    (--dock-max-h; the old fixed 40vh cut long problems short). */}
-			<div className="max-h-[var(--dock-max-h,40vh)] overflow-y-auto px-4 pt-3 pb-2">
+		<div ref={rootRef} data-testid="practice-dock" data-problem={problemCallId} data-dock-surface="" style={surfaceStyle} className="flow-root overflow-y-auto overscroll-contain">
+			{/* The agent's half gets the session budget left after the fixed
+			    thinking field and submit row, including their outer margins. */}
+			<div ref={scrollRef} data-dock-scroll-area="" className="overflow-y-auto overscroll-contain px-4 pt-3 pb-2">
 				<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Problem</div>
 				<div className="lh-prose text-[15px]">
 					<MessageResponse>{typeof input.statement === "string" ? repairMathForDisplay(input.statement) : input.statement}</MessageResponse>
@@ -147,7 +147,7 @@ export function PracticeDock({ problemCallId, input, expanded, onExpand, onSubmi
 					placeholder="Work here, think out loud."
 					rows={4}
 					className={cn(
-						"field-sizing-content lh-input max-h-64 min-h-16 w-full resize-none bg-transparent px-2.5 pb-2 outline-none placeholder:text-muted-foreground",
+						"lh-input h-16 w-full resize-none overflow-y-auto overscroll-contain bg-transparent px-2.5 pb-2 outline-none placeholder:text-muted-foreground",
 					)}
 				/>
 				{/* The submit row (owner round 4, 2026-10-05): IDENTICAL to the

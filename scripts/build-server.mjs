@@ -12,6 +12,8 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const STANDALONE = path.join(ROOT, ".next", "standalone");
@@ -52,7 +54,7 @@ if (exists(leakedData)) {
 // (the DEV BYOK key store, 0600) byte-identical into the DMG (caught in
 // the 2026-10-08 payload audit; excluded in next.config.ts — this guard
 // makes a regression loud instead of silent).
-for (const secret of ["auth.json", ".env", ".env.local"]) {
+for (const secret of ["auth.json", "oauth.json", "oauth.json.lock", ".env", ".env.local", ...fs.readdirSync(STANDALONE).filter((name) => name.startsWith("oauth.json.tmp-") || name.startsWith(".oauth.json"))]) {
 	if (exists(path.join(STANDALONE, secret))) {
 		console.error(`[build-server] REFUSING: standalone contains ${secret} — dev secrets would ship in the app.`);
 		console.error("             Check outputFileTracingExcludes in next.config.ts.");
@@ -80,12 +82,22 @@ for (const extra of ["dist", path.join("node_modules", "electron")]) {
 //    agent reads them from disk at request time).
 for (const asset of [
 	path.join("src", "agent", "system-prompt.md"),
+	path.join("node_modules", "@earendil-works", "pi-ai", "dist", "auth", "oauth", "github-copilot.js"),
 	path.join("src", "agent", "prompts", "teacher", "20-teaching.md"),
 ]) {
 	if (!exists(path.join(STANDALONE, asset))) {
 		console.error(`[build-server] prompt asset missing from the trace: ${asset}`);
 		process.exit(1);
 	}
+}
+
+// Merely finding the lazy entry is insufficient: tracing can omit its imports
+// (notably pi-ai's utils/sleep.js). Import only — never start OAuth/network IO.
+const oauthRuntime = pathToFileURL(path.join(STANDALONE, "node_modules", "@earendil-works", "pi-ai", "dist", "auth", "oauth", "github-copilot.js")).href;
+const oauthProbe = spawnSync(process.execPath, ["--input-type=module", "-e", `await import(${JSON.stringify(oauthRuntime)})`], { encoding: "utf8", timeout: 10_000 });
+if (oauthProbe.status !== 0) {
+	console.error("[build-server] Copilot OAuth runtime import failed:", oauthProbe.stderr || oauthProbe.error?.message);
+	process.exit(1);
 }
 
 console.log("[build-server] server payload ready:", STANDALONE);

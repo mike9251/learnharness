@@ -23,6 +23,7 @@ import { piModels } from "../agent/models.ts";
 import { settingsStore } from "../store/settings.ts";
 import { effectiveSettings } from "./stores.ts";
 import { keyValue } from "./keys.ts";
+import { COPILOT_PROVIDER, copilotStatus, copilotModels } from "./copilot.ts";
 import type { ChatSettings } from "../core/contracts/chat.ts";
 import type {
 	CatalogDefaults,
@@ -121,11 +122,14 @@ export function catalogSlots(): SlotPins {
  *  with keyPresent read env-wins through the keys seam, fresh per call —
  *  saving a key immediately federates the provider into the picker. */
 export function catalogProviders(): CatalogProvider[] {
-	return AUTH_PROVIDER_KEYS.map((p) => ({
-		id: p.id,
-		envVar: p.envVar,
-		keyPresent: keyValue(p.envVar) !== undefined,
-	})).sort((a, b) => a.id.localeCompare(b.id));
+	return [
+		...AUTH_PROVIDER_KEYS.map((p) => ({
+			id: p.id,
+			envVar: p.envVar,
+			keyPresent: keyValue(p.envVar) !== undefined,
+		})),
+		{ id: COPILOT_PROVIDER, keyPresent: copilotStatus().connected },
+	].sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /** The providers whose key is present — the picker federates exactly
@@ -167,7 +171,7 @@ export function catalogContextLimits(): Map<string, number> {
 	const index = new Map<string, number>();
 	for (const provider of piModels().getProviders()) {
 		if (!keyed.has(provider.id)) continue;
-		for (const model of piModels().getModels(provider.id)) {
+		for (const model of provider.id === COPILOT_PROVIDER ? copilotModels() : piModels().getModels(provider.id)) {
 			index.set(`${provider.id}:${model.id}`, model.contextWindow);
 		}
 	}
@@ -183,7 +187,7 @@ export function modelCatalog(): ModelCatalogResponse {
 	const models = piModels()
 		.getProviders()
 		.filter((p) => keyed.has(p.id))
-		.flatMap((p) => piModels().getModels(p.id))
+		.flatMap((p) => p.id === COPILOT_PROVIDER ? copilotModels() : piModels().getModels(p.id))
 		.map(toModelDto)
 		.sort((a, b) => (a.provider === b.provider ? a.id.localeCompare(b.id) : a.provider.localeCompare(b.provider)));
 	return {

@@ -1644,6 +1644,8 @@ export const PRICES: Record<string, ModelPrice> = {
 
 // ─── Pure helpers (folds + cost inference) ───────────────────────────────────
 
+export const COPILOT_COST_NOTE = "Copilot dollar cost is unavailable. GitHub tracks subscription usage.";
+
 /** Sum a list of per-step usages into one CallUsage. A field stays
  *  undefined when EVERY step left it unreported — absent is not zero. */
 export function sumSteps(steps: readonly CallUsage[]): CallUsage {
@@ -1658,13 +1660,18 @@ export function sumSteps(steps: readonly CallUsage[]): CallUsage {
 	};
 }
 
-/** One model call's inferred cost in USD — null when the model is unknown
- *  or the usage fields are absent (never guess a price). Cached input bills
- *  at the cache-read rate; cache writes bill separately where priced. */
+/** One model call's inferred cost in USD — null when the model is unknown,
+ *  subscription-billed, or usage fields are absent (never guess a price).
+ *  Cached input bills at the cache-read rate; cache writes bill separately
+ *  where priced. */
 export function callCost(
 	usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheWriteTokens?: number },
 	model: string,
 ): number | null {
+	// Copilot catalog rates are not the user's bill. GitHub tracks subscription
+	// usage; neither API-equivalent dollars nor $0 represent that cost.
+	// Keep this policy outside the generated table so syncs cannot erase it.
+	if (model.startsWith("github-copilot:")) return null;
 	const price = PRICES[model];
 	if (!price) return null;
 	if (usage.inputTokens === undefined || usage.outputTokens === undefined) return null;
@@ -1681,6 +1688,8 @@ export function callCost(
 
 /** One turn's inferred cost — the sum over its steps; null when unpriceable. */
 export function turnCost(turn: TurnUsage): number | null {
+	// Even an empty/aborted Copilot turn must not imply a free subscription.
+	if (turn.model.startsWith("github-copilot:")) return null;
 	let total = 0;
 	for (const step of turn.steps) {
 		const c = callCost(step, turn.model);

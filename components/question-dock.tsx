@@ -5,6 +5,7 @@ import { ArrowDownIcon, ChevronRightIcon, PlayIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { finishDictation, isDictationActive, joinDictation, useDictationTarget } from "@/components/dictation";
 import { useEnterSubmits } from "@/components/enter-submits";
+import { scrollWithinDock, useDockHeight } from "@/components/use-dock-height";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import {
@@ -418,7 +419,7 @@ function QuestionDockForm({
 	   The listener is document-level and lives only while the dock is
 	   expanded — collapsed, the bar's native Enter expands it. */
 	const [kbdIdx, setKbdIdx] = useState<number | null>(null);
-	const rootRef = useRef<HTMLDivElement>(null);
+	const { rootRef, scrollRef, surfaceStyle } = useDockHeight(!!active, "55dvh");
 	const otherInputRef = useRef<HTMLInputElement>(null);
 	const thinkingRef = useRef<HTMLTextAreaElement>(null);
 	// One row past the options is the trailing row: quiz → don't-know,
@@ -442,7 +443,8 @@ function QuestionDockForm({
 			// the field.
 			if (sel.otherSelected) setSel((prev) => ({ ...prev, otherSelected: false, dontKnow: false }));
 			else {
-				otherInputRef.current?.focus();
+				otherInputRef.current?.focus({ preventScroll: true });
+				if (otherInputRef.current) scrollWithinDock(otherInputRef.current, scrollRef.current, rootRef.current);
 				selectOther();
 			}
 		}
@@ -454,7 +456,8 @@ function QuestionDockForm({
 		const row = rootRef.current?.querySelector(`[data-kbdrow="${idx}"]`) as HTMLElement | null;
 		if (!row) return;
 		const el = (row.querySelector("input") as HTMLElement | null) ?? row;
-		el.focus();
+		el.focus({ preventScroll: true });
+		scrollWithinDock(row, scrollRef.current, rootRef.current);
 	};
 
 	useEffect(() => {
@@ -481,8 +484,10 @@ function QuestionDockForm({
 			if (e.key === "Tab" && !e.shiftKey && !modded) {
 				e.preventDefault();
 				e.stopPropagation();
-				if (t?.closest?.("[data-kbdrow]")) thinkingRef.current?.focus();
-				else {
+				if (t?.closest?.("[data-kbdrow]")) {
+					thinkingRef.current?.focus({ preventScroll: true });
+					if (thinkingRef.current) scrollWithinDock(thinkingRef.current, rootRef.current);
+				} else {
 					const idx = kbdIdx ?? 0;
 					setKbdIdx(idx);
 					focusRow(idx);
@@ -534,17 +539,15 @@ function QuestionDockForm({
 	// Keep the walked row visible (the question area scrolls internally).
 	useEffect(() => {
 		if (kbdIdx === null) return;
-		rootRef.current
-			?.querySelector(`[data-kbdrow="${kbdIdx}"]`)
-			?.scrollIntoView({ block: "nearest" });
-	}, [kbdIdx]);
+		const row = rootRef.current?.querySelector<HTMLElement>(`[data-kbdrow="${kbdIdx}"]`);
+		if (row) scrollWithinDock(row, scrollRef.current, rootRef.current);
+	}, [kbdIdx, rootRef, scrollRef]);
 
 	return (
-		<div ref={rootRef} data-testid="question-dock">
-			{/* Question area — scrolls internally if very tall; the bottom row stays put.
-			    Capped by the measured column (--dock-max-h; the old fixed 55dvh cut
-			    long questions short — owner round, 2026-10-05). */}
-			<div data-session-find-root="" className="max-h-[var(--dock-max-h,55dvh)] overflow-y-auto px-4 pt-3">
+		<div ref={rootRef} data-testid="question-dock" data-dock-surface="" style={surfaceStyle} className="flow-root overflow-y-auto overscroll-contain">
+			{/* The whole form shares the session budget; fixed controls are
+			    subtracted before capping this internal question/options scroller. */}
+			<div ref={scrollRef} data-dock-scroll-area="" data-session-find-root="" className="overflow-y-auto overscroll-contain px-4 pt-3">
 				<div className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
 					{toolName === "probe"
 						? "Probe"
@@ -856,7 +859,7 @@ function QuestionDockForm({
 							}}
 							placeholder="Type your answer…"
 							rows={1}
-							className="field-sizing-content lh-input max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
+							className="lh-input h-10 w-full resize-none overflow-y-auto overscroll-contain bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground"
 						/>
 					) : (
 						<textarea
@@ -887,10 +890,10 @@ function QuestionDockForm({
 							placeholder="Why this answer? Whatever comes to mind."
 							rows={1}
 							className={cn(
-								"field-sizing-content lh-input max-h-48 w-full resize-none bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground/70",
+								"lh-input w-full resize-none overflow-y-auto overscroll-contain bg-transparent px-2.5 py-2 outline-none placeholder:text-muted-foreground/70",
 								// Phase-scaled prominence: teaching invites depth,
 								// probing stays quick.
-								phase === "teach" ? "min-h-[4.5rem]" : "min-h-10",
+								phase === "teach" ? "h-[4.5rem]" : "h-10",
 							)}
 						/>
 					)}

@@ -44,6 +44,8 @@ export interface RecentRun {
 	title: string;
 	/** Whole-run inferred USD; null only when EVERY stage is unpriced. */
 	dollars: number | null;
+	/** Copilot subscription usage is excluded from dollars, even in mixed runs. */
+	copilotUsage?: boolean;
 	tokens: CallUsage;
 	/** What the run merged into the graph; absent on failed runs. */
 	merged?: EmissionStats;
@@ -51,6 +53,8 @@ export interface RecentRun {
 
 /** The cost pill's whole payload: stage totals + recent runs. */
 export interface GraphCostSummary {
+	/** Includes Copilot subscription usage (including runs outside the recent cap). */
+	copilotUsage?: boolean;
 	/** Inferred USD across all priced stages of all runs. */
 	totalDollars: number;
 	/** Runs where EVERY stage was unpriced (totalDollars excludes them). */
@@ -89,6 +93,8 @@ const emptyStage = (): StageCost => ({ dollars: 0, unpricedRuns: 0, runs: 0, tok
 /** One stage's dollars over its steps; null when the model is unpriced
  *  (all-or-nothing: a stage runs one model). */
 function stageDollars(model: string, steps: readonly CallUsage[]): number | null {
+	// Empty/aborted subscription stages are unavailable too, not free.
+	if (model.startsWith("github-copilot:")) return null;
 	let total = 0;
 	for (const step of steps) {
 		const c = callCost(step, model);
@@ -143,6 +149,8 @@ export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 			kind: "extraction",
 			title,
 			dollars: runDollars,
+			...([stages.extractor.model, stages.auditor.model].some((model) => model.startsWith("github-copilot:"))
+				? { copilotUsage: true } : {}),
 			tokens: sumSteps(allSteps),
 			...(run.stats ? { merged: run.stats } : {}),
 		});
@@ -161,6 +169,7 @@ export function graphCostSummary(input: CostSummaryInput): GraphCostSummary {
 	// A run is "unpriced" when it billed nothing countable at all.
 	const unpricedRuns = runs.filter((r) => r.dollars === null).length;
 	return {
+		...(runs.some((run) => run.copilotUsage) ? { copilotUsage: true } : {}),
 		totalDollars: extraction.dollars + audit.dollars,
 		unpricedRuns,
 		stages: { extraction, audit },

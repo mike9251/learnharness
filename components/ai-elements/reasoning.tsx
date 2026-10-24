@@ -16,10 +16,7 @@ import {
   memo,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
-  useRef,
-  useState,
 } from "react";
 import { Streamdown } from "streamdown";
 
@@ -51,8 +48,6 @@ export type ReasoningProps = ComponentProps<typeof Collapsible> & {
   onOpenChange?: (open: boolean) => void;
 };
 
-const AUTO_CLOSE_DELAY = 1000;
-
 export const Reasoning = memo(
   ({
     className,
@@ -63,12 +58,8 @@ export const Reasoning = memo(
     children,
     ...props
   }: ReasoningProps) => {
-    // COLLAPSED BY DEFAULT, ALWAYS (owner, streaming round 2026-10-01):
-    // the old default opened on streaming and an auto-open effect
-    // re-fought a manual collapse — the block "wasn't collapsible until
-    // it finished". Collapsed is the default; opening is always the
-    // learner's click; the auto-close after the stream still tidies a
-    // row the learner had opened.
+    // Collapsed by default. Only the learner changes the open state;
+    // streaming updates and completion must not undo their choice.
     const resolvedDefaultOpen = defaultOpen ?? false;
 
     const [isOpen, setIsOpen] = useControllableState<boolean>({
@@ -76,26 +67,6 @@ export const Reasoning = memo(
       onChange: onOpenChange,
       prop: open,
     });
-    const hasEverStreamedRef = useRef(isStreaming);
-    const [hasAutoClosed, setHasAutoClosed] = useState(false);
-
-    // Auto-close when streaming ends (once only, and only if it ever streamed)
-    useEffect(() => {
-      if (
-        hasEverStreamedRef.current &&
-        !isStreaming &&
-        isOpen &&
-        !hasAutoClosed
-      ) {
-        const timer = setTimeout(() => {
-          setIsOpen(false);
-          setHasAutoClosed(true);
-        }, AUTO_CLOSE_DELAY);
-
-        return () => clearTimeout(timer);
-      }
-    }, [isStreaming, isOpen, setIsOpen, hasAutoClosed]);
-
     const handleOpenChange = useCallback(
       (newOpen: boolean) => {
         setIsOpen(newOpen);

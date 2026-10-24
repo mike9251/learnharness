@@ -48,14 +48,25 @@ Future teaching sessions can read the graph instead of starting from scratch. Pr
 - **Windows (x64):** run the installer. It is currently unsigned; Windows may show an “unknown publisher” or SmartScreen warning.
 - **Linux (x64):** make the AppImage executable and open it, or install the Debian/Ubuntu `.deb`.
 
-Add your provider API key and choose your models, then start a session with what you want to understand. LearnHarness supports 30+ provider options, including OpenAI, Anthropic, Google, DeepSeek, and OpenRouter. Optional dictation and web search use separate service keys.
+Add a provider API key **or connect GitHub Copilot**, then choose your models and start a session with what you want to understand. LearnHarness supports 30+ provider options, including OpenAI, Anthropic, Google, DeepSeek, and OpenRouter. Optional dictation and web search use separate service keys.
+
+### GitHub Copilot
+
+In first-time setup or **Settings → Keys**, choose **Connect GitHub Copilot** (or **Connect** on its row), copy the displayed code, and follow **Open GitHub** to authorize it. Sign in with the github.com account that has Copilot access. Once connected, choose your models normally; model selections are never changed automatically.
+
+- The standard pi-ai login may enable eligible models on your GitHub account. The picker shows account-available models supported by the bundled catalog; availability and usage remain subject to your GitHub plan and policies.
+- Tokens stay on your machine and refresh automatically. **Cancel** or closing the connection UI stops a pending login; **Retry** starts another attempt.
+- **Disconnect** removes local credentials, not the authorization grant on GitHub. Existing model selections remain saved and require reconnection or a different provider.
+- Token counts remain visible, but Copilot dollar costs show **—**, not API-equivalent prices. GitHub tracks subscription usage; mixed-provider totals identify unpriced usage.
+
+Custom GitHub Enterprise domains and pasted Copilot tokens are not supported in this version.
 
 All three platforms support in-app updates.
 
 ## Your keys, your data
 
-- **Your keys and models.** No LearnHarness subscription or markup. You pay your providers for usage; a live cost meter shows model costs.
-- **Local storage.** Your chats, graph, settings, and API keys live on your machine. Learning records are plain files you can inspect.
+- **Your keys and models.** No LearnHarness subscription or markup. You pay your providers directly; a live cost meter estimates API-key model costs. Copilot subscription usage is tracked by GitHub instead.
+- **Local storage.** Your chats, graph, settings, API keys, and OAuth credentials live on your machine. Learning records are plain files you can inspect.
 - **External services.** Models run through your configured providers. Model requests send the context needed for the task; web research and dictation also contact external services. Local storage does not mean offline processing.
 - **Inspectable behavior.** System prompts are visible and editable. The app is open source under the AGPL-3.0 license.
 

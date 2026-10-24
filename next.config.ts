@@ -39,6 +39,10 @@ const nextConfig: NextConfig = {
 		"*": [
 			"data/**/*",
 			"auth.json",
+			"oauth.json",
+			"oauth.json.tmp-*",
+			".oauth.json*",
+			"oauth.json.lock/**/*",
 			".env*",
 		],
 	},
@@ -70,6 +74,9 @@ const nextConfig: NextConfig = {
 			// per-platform-binary story as the canvas above (one per build).
 			"node_modules/@resvg/resvg-js-*/**/*",
 			"node_modules/@earendil-works/pi-ai/dist/providers/data/**/*",
+			// OAuth uses opaque lazy imports; device login must work packaged too.
+			"node_modules/@earendil-works/pi-ai/dist/auth/oauth/**/*.js",
+			"node_modules/@earendil-works/pi-ai/dist/utils/sleep.js",
 			"node_modules/@earendil-works/pi-agent-core/dist/**/*.json",
 		],
 	},

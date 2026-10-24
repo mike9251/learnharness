@@ -223,10 +223,10 @@ describe("render smoke tests", () => {
 				onSubmit={() => {}}
 			/>,
 		);
-		assert.ok(teach.includes("min-h-[4.5rem]"), "teach: a generous dump area");
+		assert.ok(teach.includes("h-[4.5rem]"), "teach: a fixed generous dump area");
 		const probe = renderDock({ toolName: "quiz", toolCallId: "q1", input: quizInput as never });
-		assert.ok(!probe.includes("min-h-[4.5rem]"), "probe (default): stays compact");
-		assert.ok(probe.includes("min-h-10"), "probe: one quiet row");
+		assert.ok(!probe.includes("h-[4.5rem]"), "probe (default): stays compact");
+		assert.ok(probe.includes("h-10"), "probe: one fixed quiet row");
 	});
 
 	it("text-mode asks keep Enter-to-submit and the answer label", () => {

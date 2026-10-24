@@ -76,7 +76,8 @@ export interface AuthProviderInfo {
  * loudly instead of drifting silently.
  *
  * EXCLUDED by owner spec — providers whose auth is not a plain key this
- * wave: github-copilot (OAuth), amazon-bedrock (AWS creds), google-vertex
+ * wave: github-copilot (now a separate OAuth connection, never a key row),
+ * amazon-bedrock (AWS creds), google-vertex
  * (ADC), azure (needs a base URL), the cloudflare
  * account-scoped pair. Anthropic keeps ANTHROPIC_API_KEY only — its
  * AUTH_TOKEN/OAUTH_TOKEN alternates stay env-only. openai-codex exposes

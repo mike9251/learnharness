@@ -49,6 +49,9 @@ import type { PlanBlockData } from "./contracts/chat.ts";
 export interface LhViewPart extends Record<string, unknown> {
 	type: string;
 	id?: string;
+	/** View-only reasoning identity within this chat. Native assistant/block
+	 * ordinals survive the server replacing provisional message IDs at settle. */
+	disclosureId?: string;
 	text?: string;
 	state?: string;
 	toolCallId?: string;
@@ -85,11 +88,13 @@ export interface LiveTurnState {
 	 *  input-streaming (the shimmer); settled dangling calls render
 	 *  input-available (the dock mounts from the record). */
 	inFlight: boolean;
-	/** Ids of the messages THIS consume is streaming (optimistic round 3,
-	 *  2026-10-02): an arrived-but-empty streaming message projects one
-	 *  empty reasoning part — the thinking row — so the placeholder's
-	 *  handoff is seamless; settled empty messages stay hidden. */
+	/** Messages belonging to THIS consume, including finished model steps.
+	 *  Kept for tool execution ownership; membership alone does not mean
+	 *  the model is still generating that message. */
 	streamingIds: ReadonlySet<string>;
+	/** The one message currently receiving model updates. null between
+	 *  model steps; absent for callers projecting only execution state. */
+	activeMessageId?: string | null;
 }
 
 function textPart(text: string): LhViewPart {
@@ -152,6 +157,7 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 	// was summarized away. Everything before it stays visible to the
 	// user (full history is never hidden); only the MODEL's context jumps.
 	const compaction = activeCompactionOf(messages);
+	let assistantOrdinal = 0;
 
 	for (const m of messages) {
 		const role = (m as { role?: string }).role;
@@ -191,6 +197,7 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 		}
 
 		if (role === "assistant") {
+			const ordinal = assistantOrdinal++;
 			const assistant = m as AssistantMessage;
 			// OWNER RULING (2026-09-26): reasoning ALWAYS renders above the
 			// message it belongs to. Providers emit trailing reasoning tokens
@@ -211,11 +218,20 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 			// back to a spinner mid-transcript; live cards belong at the
 			// bottom, and this gate is what puts them there by construction).
 			const streamingMessage = live?.streamingIds.has(m.id) === true;
+			const activeMessage = live?.inFlight === true && live.activeMessageId === m.id;
+			const lastBlock = assistant.content.at(-1);
 			for (const block of assistant.content) {
 				if (block.type === "text") {
 					rest.push({ type: "text", id: `${m.id}-t${textN++}`, text: block.text, state: "done" });
 				} else if (block.type === "thinking") {
-					reasoning.push({ type: "reasoning", id: `${m.id}-r${reasoningN++}`, text: block.thinking, state: "done" });
+					// Empty/encrypted-only items are context for the provider, not
+					// readable thoughts. Keep their native indices so a later text
+					// update never transfers an open panel to a different block.
+					const disclosureId = `reasoning-${ordinal}-${reasoningN}`;
+					const id = `${m.id}-r${reasoningN++}`;
+					if (!block.redacted && block.thinking.trim()) {
+						reasoning.push({ type: "reasoning", id, disclosureId, text: block.thinking, state: activeMessage && block === lastBlock ? "streaming" : "done" });
+					}
 				} else if (block.type === "toolCall") {
 					const part = toolPartOf(block, live, streamingMessage);
 					// The conclusion's reveal join (owner round, 2026-10-05): the
@@ -228,22 +244,15 @@ export function projectView(messages: readonly LhMessage[], live?: LiveTurnState
 					rest.push(part);
 				}
 			}
-			const parts: LhViewPart[] = [...reasoning, ...rest];
-			if (parts.length === 0) {
-				// An arrived-but-silent STREAMING message (owner, optimistic
-				// round 3, 2026-10-02): the turn's first applied event can
-				// carry empty content — project ONE empty reasoning part so
-				// the message's ARRIVAL renders the thinking row (chat.tsx's
-				// Reasoning isStreamings the last part: the same spinner +
-				// shimmer as the placeholder it replaces — the handoff is
-				// seamless and the two can never double). Settled empty
-				// messages stay hidden (presentation-only).
-				if (live?.streamingIds.has(m.id)) {
-					parts.push({ type: "reasoning", id: `${m.id}-r0`, text: "", state: "done" });
-				} else {
-					continue;
-				}
+			const hasReadableOutput = rest.some((part) => part.type !== "text" || part.text?.trim());
+			const waitingForReasoning = lastBlock?.type === "thinking" && (lastBlock.redacted || !lastBlock.thinking.trim());
+			if (activeMessage && (waitingForReasoning || (reasoning.length === 0 && !hasReadableOutput))) {
+				// Exactly one non-expandable activity marker for the current
+				// model step, never one empty disclosure per provider item.
+				reasoning.push({ type: "data-agent-working", id: `${m.id}-working`, state: "streaming" });
 			}
+			const parts: LhViewPart[] = [...reasoning, ...rest];
+			if (parts.length === 0) continue;
 			const group = lastAssistant();
 			if (group) {
 				// Same group: the step separator renders between the steps.

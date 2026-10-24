@@ -35,6 +35,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useBackdropDismiss } from "@/components/backdrop-dismiss";
+import { CopilotConnection } from "@/components/copilot-connection";
 import type React from "react";
 import { type ModelCatalogEntry, type ModelSlotName, type ModelsSettings } from "@/src/core";
 import { prettyModel } from "@/components/usage-format";
@@ -147,10 +148,12 @@ export function SetupKeysBody({
 }) {
 	return (
 		<div className="flex flex-col gap-3 px-6 py-5" data-testid="setup-stage-keys">
-			<p className="text-sm text-foreground">Add a provider key.</p>
+			<p className="text-sm text-foreground">Connect a provider.</p>
 			<p className="text-xs text-muted-foreground">
-				Choose your AI provider and paste its API key. You’ll pick your models next.
+				Add an API key or connect GitHub Copilot. You’ll pick your models next.
 			</p>
+			<CopilotConnection setup />
+			<p className="text-xs text-muted-foreground">Or add a provider API key.</p>
 			<div className="flex flex-col gap-2">
 				<div ref={menuAnchor} className="relative max-w-96">
 					<button
@@ -422,7 +425,7 @@ export function SetupDialog({
 				</header>
 
 				{stage === "keys" ? (
-					<div className="flex flex-col px-6 py-5">
+					<div className="flex flex-col overflow-y-auto px-6 py-5">
 						{failed ? (
 							<p className="text-sm text-foreground">
 								Model catalog could not be loaded. Check the connection and retry.
@@ -520,7 +523,7 @@ export function SetupDialog({
 															}));
 															setOpenMenu(null);
 														}}
-														footer={catalog && catalog.length === 0 ? "No image-capable models. Add a provider key with access to a vision model." : undefined}
+														footer={catalog && catalog.length === 0 ? "No image-capable models. Connect a provider with access to a vision model." : undefined}
 													/>
 												</MenuShell>
 											)}

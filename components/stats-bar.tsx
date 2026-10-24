@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { contextWindow, sessionCost, turnCost, type ChatSettings, type TurnUsage } from "@/src/core";
+import { COPILOT_COST_NOTE, contextWindow, sessionCost, turnCost, type ChatSettings, type TurnUsage } from "@/src/core";
 import { formatTokens, formatUsd, prettyModel } from "@/components/usage-format";
 import { ModelControl, catalogLimits, useModelCatalog } from "@/components/model-picker";
 
@@ -87,7 +87,8 @@ export function StatsBar({
 	// Honest cost: show dollars only when at least one turn priced;
 	// otherwise "—" (never a fake $0.0000).
 	const pricedCount = turns.length - unpriced;
-	const costLabel = pricedCount > 0 ? formatUsd(cost) : "—";
+	const copilotUsage = turns.some((turn) => turn.model.startsWith("github-copilot:"));
+	const costLabel = pricedCount > 0 ? `${formatUsd(cost)}${copilotUsage ? " + unpriced" : ""}` : "—";
 	const lastModel = turns.at(-1)?.model;
 
 	return (
@@ -125,7 +126,7 @@ export function StatsBar({
 					{ctx ? (ctx.limit !== null ? `${formatTokens(ctx.usedTokens)} / ${formatTokens(ctx.limit)}` : formatTokens(ctx.usedTokens)) : "—"}
 				</span>
 				<span aria-hidden>·</span>
-				<span data-testid="stats-cost">{costLabel}</span>
+				<span data-testid="stats-cost" title={copilotUsage ? COPILOT_COST_NOTE : undefined}>{costLabel}</span>
 			</button>
 				{open && (
 					<div
@@ -153,6 +154,7 @@ export function StatsBar({
 								</div>
 							)}
 						</div>
+						{copilotUsage && <p className="mt-2 text-muted-foreground">{COPILOT_COST_NOTE}</p>}
 						{turns.length > 0 && (
 							<>
 								<div className="mb-1 mt-2.5 border-t pt-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">

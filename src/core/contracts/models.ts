@@ -78,8 +78,8 @@ export interface ModelCatalogResponse {
 /** One row of the providers surface. */
 export interface CatalogProvider {
 	id: string;
-	/** The env var whose presence federates this provider in. */
-	envVar: string;
-	/** Whether that var is currently present (env or auth file). */
+	/** API-key env var; absent for OAuth-only providers. */
+	envVar?: string;
+	/** Whether credentials are present (API key or saved OAuth login). */
 	keyPresent: boolean;
 }

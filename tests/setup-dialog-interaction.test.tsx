@@ -51,6 +51,7 @@ async function mount({ keyed = false, catalogFails = false } = {}) {
 		assert.equal(init?.method ?? "GET", "GET", "interaction tests must not write data");
 		const path = new URL(String(input), "http://localhost").pathname;
 		if (path === "/api/keys") return Response.json({ providers: [provider], keys: [] });
+		if (path === "/api/auth/github-copilot") return Response.json({ connected: false });
 		assert.equal(path, "/api/models");
 		if (catalogFails) throw new Error("fixture catalog failure");
 		return Response.json({
@@ -175,7 +176,7 @@ describe("setup polish interactions", () => {
 	it("the empty vision list gives the approved next action without an em dash", async () => {
 		await mount({ keyed: true });
 		await click(element('[data-testid="setup-trigger-vision"]'));
-		assert.ok(element('[data-testid="setup-menu-vision"]').textContent?.includes("No image-capable models. Add a provider key with access to a vision model."));
+		assert.ok(element('[data-testid="setup-menu-vision"]').textContent?.includes("No image-capable models. Connect a provider with access to a vision model."));
 	});
 
 	it("catalog failure uses the approved two-sentence error", async () => {

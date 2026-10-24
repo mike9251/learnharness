@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2Icon, MicIcon } from "lucide-react";
 import { useSettingsDialog } from "@/components/settings/settings-dialog";
 import { Hint } from "@/components/ui/hint";
+import { DictationRun, type DictationPhase } from "@/components/dictation-run";
+
+export type { DictationPhase } from "@/components/dictation-run";
 
 /**
  * Voice dictation — the cloud engine (STT wave 1, 2026-09-17).
@@ -17,16 +20,16 @@ import { Hint } from "@/components/ui/hint";
  *
  * Ported patterns from the owner's pi `dictate` extension (his words:
  * "very well tuned") — see ~/.pi/agent/extensions/dictate:
- *   - generation counter: every start/stop increments it; all async
- *     handlers no-op when stale, so a dying session's socket can never
- *     tear down the current one.
+ *   - run-owned capture/socket callbacks ignore retired resources, so a
+ *     dying session cannot inject audio into or tear down the next run.
  *   - meter: latest-RMS-never-resets — the level ref keeps the last
  *     observed value, so a tick with no fresh audio re-renders the last
  *     level instead of dropping to silence (60ms tick samples the ref).
  *   - dB mapping floor −50 / ceiling −10: the sweet spot for showing
  *     conversational speech as mid-height bars without pegging.
- *   - stop: mic dies FIRST (no more audio enqueues), then CloseStream,
- *     then a 3s safety net in case Deepgram never closes the socket.
+ *   - stop: hardware capture stops, the worklet drains its partial frame,
+ *     queued PCM reaches the socket, then CloseStream requests the finals.
+ *     Startup/drain/finalization waits are bounded and failures are visible.
  *   - interim_results=false, endpointing=300: his live-tuned params — no
  *     partial hypotheses, finals commit ~300ms after a pause (owner
  *     round 1: live words are distracting and shift the meter; the
@@ -35,8 +38,8 @@ import { Hint } from "@/components/ui/hint";
  * Owner round 2 (2026-09-17, second live test):
  *   - DEFERRED transcript: finals accumulate in a buffer during the run
  *     and flush into the primary input ONCE, when the dictation ends
- *     (click-again/Esc → Deepgram flushes its last finals → socket close
- *     → one joined append). Nothing textual renders while recording —
+ *     (Stop → Deepgram flushes its last finals → socket close → one
+ *     joined append). Escape cancels and discards. Nothing textual renders while recording —
  *     only the meter. Live output may return as a toggleable setting at
  *     the settings milestone; deferred is the only behavior for now.
  *   - ADAPTIVE meter: the strip's cell count derives from its measured
@@ -50,10 +53,9 @@ import { Hint } from "@/components/ui/hint";
  *     field, select modes → "Your thinking"), else the page's composer.
  *     Implemented as a module-level registry the question form claims on
  *     mount — see useDictationTarget below.
- *   - Click → meter IMMEDIATELY (optimistic): the meter strip renders
- *     from the click, connection + TCC happen behind it. The token mint
- *     and the mic acquisition run CONCURRENTLY (Promise.all) to shrink
- *     the real gap.
+ *   - Click → status/meter immediately. Starting microphone, Connecting,
+ *     Listening, and Finishing are distinguished explicitly. Token mint,
+ *     microphone acquisition, module loading and context resume overlap.
  *
  * Meter rendering lives in <DictationBar> (own 60ms timer over the level
  * ref) so the 16-renders/sec never touch the page component — only the
@@ -64,12 +66,12 @@ import { Hint } from "@/components/ui/hint";
  * NEW AudioContext → addModule fetch → WSS handshake, and DROPPED every
  * frame that arrived before the socket was OPEN — the first seconds of
  * speech never reached Deepgram. Now:
- *   - QUEUE-DON'T-DROP (A): frames arriving before OPEN buffer (capped,
- *     oldest dropped) and flush in order on open — captured speech is
- *     never lost, wherever in setup it lands.
- *   - PARALLEL HANDSHAKE (B, mic-gated): the handshake starts the moment
- *     the capture graph is live, not after it. Mic-gated, NOT token-gated:
- *     an OS TCC prompt can outlive Deepgram's 10s idle timeout.
+ *   - QUEUE-DON'T-DROP (A): frames arriving before OPEN buffer and flush
+ *     in order on open, even after Stop. Buffer exhaustion fails visibly
+ *     rather than silently discarding the beginning of the recording.
+ *   - MIC-GATED HANDSHAKE (B): the socket opens only after capture and
+ *     the token are ready; a permission prompt cannot consume Deepgram's
+ *     audio idle timeout. Stop during connection preserves captured PCM.
  *   - PERSISTENT GRAPH (C): one app-lifetime AudioContext + a memoized
  *     worklet module — per-run contexts paid context creation AND a
  *     worklet-module fetch on every start (through the dev server in dev).
@@ -245,8 +247,6 @@ export function useDictationTarget(append: (text: string) => void, claimed: bool
 	}, [append, claimed]);
 }
 
-export type DictationPhase = "idle" | "connecting" | "recording" | "stopping";
-
 export type Dictation = {
 	phase: DictationPhase;
 	/** Terminal-state explanation, shown inside the wide button (cleared on the next start). */
@@ -287,306 +287,76 @@ export type Dictation = {
 export function useDictation({ append }: { append: (text: string) => void }): Dictation {
 	const [phase, setPhase] = useState<DictationPhase>("idle");
 	const [error, setError] = useState<string | null>(null);
-	/** Latest RMS from the worklet — the meter samples this (dictate pattern). */
 	const levelRef = useRef(0);
-	/** The page's fallback append — kept fresh per render so a mid-recording
-	 *  retarget (composer↔question) is honored on the very next final. */
 	const appendRef = useRef(append);
 	appendRef.current = append;
+	const runRef = useRef<DictationRun | null>(null);
+	const mountedRef = useRef(false);
 
-	// Live machinery (non-render values). The MediaStream tracks stop and
-	// the per-run nodes disconnect on teardown; the socket is recreated per
-	// run; the AudioContext is app-lifetime (mitigation C).
-	const wsRef = useRef<WebSocket | null>(null);
-	const streamRef = useRef<MediaStream | null>(null);
-	/** Per-run graph nodes — the CONTEXT outlives runs (mitigation C). */
-	const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
-	const workletRef = useRef<AudioWorkletNode | null>(null);
-	/** Frames captured before the socket is OPEN (mitigation A): flushed in
-	 *  order on open; capped at 256 frames (≈32s) with the oldest dropped;
-	 *  cleared at teardown so a dead run's audio can't leak into the next. */
-	const pendingRef = useRef<ArrayBuffer[]>([]);
-	const genRef = useRef(0); // stale-handler guard (dictate pattern)
-	const safetyRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const reconnectsRef = useRef(0);
-	/** The deferred transcript (owner round 2): finals land here during the
-	 *  run and flush into the primary input once, at teardown. */
-	const bufferRef = useRef<string[]>([]);
-	/** Resolvers waiting for the run to fully end (finish(), owner
-	 *  2026-10-01): released by cleanup() — every terminal path runs it. */
-	const waitersRef = useRef<Array<() => void>>([]);
-
-	/** Flush the buffered transcript into the primary input — question claim
-	 *  first, composer fallback. Called exactly once per run, at cleanup; the
-	 *  buffer clears itself so double-cleanup is a no-op. */
-	const flush = useCallback(() => {
-		if (bufferRef.current.length === 0) return;
-		const text = bufferRef.current.join(" ");
-		bufferRef.current = [];
-		(questionTarget ?? appendRef.current)(text);
-	}, []);
-
-	/** Full teardown of one run's machinery. Idempotent; generation-guarded by callers. */
-	const cleanup = useCallback(() => {
-		genRef.current++;
-		dictationActiveFlag = false;
-		flush(); // the deferred transcript appears when the run ends (owner round 2)
-		if (safetyRef.current) {
-			clearTimeout(safetyRef.current);
-			safetyRef.current = null;
-		}
-		pendingRef.current = [];
-		for (const track of streamRef.current?.getTracks() ?? []) track.stop();
-		streamRef.current = null;
-		sourceRef.current?.disconnect();
-		sourceRef.current = null;
-		workletRef.current?.disconnect();
-		workletRef.current = null;
-		// The AudioContext is app-lifetime (mitigation C) — nodes die, it stays.
-		const ws = wsRef.current;
-		wsRef.current = null;
-		if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-			try {
-				ws.close();
-			} catch {}
-		}
-		setPhase("idle");
-		// The finish() waiters ride until NOW — post-flush, post-teardown:
-		// a submit path resuming after `await finishDictation()` reads the
-		// target field with the dictated tail already in it.
-		for (const w of waitersRef.current.splice(0)) w();
-		// Pre-mint for the next run (mitigation D) — best-effort; a keyless
-		// page just doesn't warm.
-		warmTokens.refresh();
-	}, []);
-
-	/** Open the Deepgram socket and wire its messages. `gen` guards staleness. */
-	const openSocket = useCallback(
-		(gen: number, token: string) => {
-			// Minted JWTs authenticate via the "bearer" subprotocol — ["token",
-			// jwt] is rejected at the handshake (verified live; "token" is for
-			// raw API keys only, as in the owner's pi dictate extension).
-			const ws = new WebSocket(DG_URL, ["bearer", token]);
-			wsRef.current = ws;
-
-			ws.addEventListener("open", () => {
-				if (gen !== genRef.current) return;
-				// Mitigation A: everything captured during the handshake (or a
-				// reconnect gap) goes out now, in order — Deepgram accepts
-				// faster-than-realtime sends.
-				for (const frame of pendingRef.current) ws.send(frame);
-				pendingRef.current = [];
-				setPhase("recording");
-			});
-			ws.addEventListener("message", (ev) => {
-				if (gen !== genRef.current) return;
-				let msg: any;
-				try {
-					msg = JSON.parse(ev.data as string);
-				} catch {
-					return;
-				}
-				if (msg.type === "Results") {
-					const text: string | undefined = msg.channel?.alternatives?.[0]?.transcript;
-					// Only finals stream (interim_results=false). DEFERRED (owner
-					// round 2): they buffer here and reach the input once, at
-					// teardown — the meter is the only live feedback.
-					if (msg.is_final && text) bufferRef.current.push(text);
-				}
-			});
-			ws.addEventListener("close", (ev) => {
-				if (gen !== genRef.current) return;
-				if (ev.code === 1000) {
-					// Our own CloseStream landing: finalize now — the stop path's
-					// safety net stays as the no-close backstop only.
-					cleanup();
-					return;
-				}
-				// Abnormal close mid-run: ONE reconnect with a fresh token (the
-				// research pass: resume is our job, no SDK to lean on).
-				if (reconnectsRef.current < 1) {
-					reconnectsRef.current++;
-					mintFreshToken() // always FRESH — a stale warm token is the likely culprit
-						.then((t) => {
-							if (gen === genRef.current) openSocket(gen, t);
-						})
-						.catch(() => {
-							if (gen === genRef.current) {
-								setError("Deepgram reconnect failed");
-								cleanup();
-							}
-						});
-				} else {
-					setError(`Deepgram connection lost (${ev.code})`);
-					cleanup();
-				}
-			});
-		},
-		[cleanup],
-	);
-
-	const start = useCallback(async () => {
-		dictationActiveFlag = true;
+	const start = useCallback(() => {
+		if (!mountedRef.current || runRef.current) return;
 		setError(null);
-		setPhase("connecting");
-		reconnectsRef.current = 0;
-		bufferRef.current = []; // fresh run, fresh buffer (round 2)
-		pendingRef.current = []; // fresh run, fresh queue (mitigation A)
-		const gen = ++genRef.current;
-
-		// Mitigation D: the warm token (pre-minted at mount / after the last
-		// run) resolves ~instantly; a cold/keyless mint surfaces below. The
-		// mic is the long pole (macOS HAL + APM init) and gates everything —
-		// the token runs concurrently with it. 127.0.0.1 is a secure
-		// context, so getUserMedia works without TLS; macOS TCC prompts on
-		// first use.
-		const tokenPromise = warmTokens.mint();
-		tokenPromise.catch(() => {}); // surfaced below; no unhandled rejection
-		const micPromise = navigator.mediaDevices.getUserMedia({
-			audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-		});
-		let stream: MediaStream;
-		try {
-			stream = await micPromise;
-			if (gen !== genRef.current) {
-				for (const track of stream.getTracks()) track.stop();
-				return;
-			}
-			streamRef.current = stream;
-
-			// Mitigation C: app-lifetime context + memoized worklet module —
-			// per-run costs (context creation, module fetch) are gone.
-			const { ctx, module } = ensureAudioGraph();
-			await module;
-			if (ctx.state === "suspended") await ctx.resume();
-			if (gen !== genRef.current) return;
-
-			const worklet = new AudioWorkletNode(ctx, "pcm-capture");
-			workletRef.current = worklet;
-			worklet.port.onmessage = (e) => {
-				const msg = e.data as { type: string; rms?: number; buffer?: ArrayBuffer };
-				if (msg.type === "level") {
-					levelRef.current = msg.rms ?? 0; // never reset to zero (dictate pattern)
-				} else if (msg.type === "audio") {
-					const ws = wsRef.current;
-					if (ws && ws.readyState === WebSocket.OPEN) ws.send(msg.buffer!);
-					// Mitigation A: not OPEN yet (handshake or reconnect gap) —
-					// queue, capped; the open handler flushes in order.
-					else {
-						pendingRef.current.push(msg.buffer!);
-						if (pendingRef.current.length > 256) pendingRef.current.shift();
-					}
+		const run = new DictationRun({
+			microphone: () => navigator.mediaDevices.getUserMedia({
+				audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+			}),
+			audioGraph: ensureAudioGraph,
+			worklet: (ctx) => new AudioWorkletNode(ctx, "pcm-capture"),
+			token: (fresh) => fresh ? mintFreshToken() : warmTokens.mint(),
+			// Minted JWTs use bearer; the token subprotocol is for raw API keys.
+			socket: (token) => new WebSocket(DG_URL, ["bearer", token]),
+			onPhase: (next) => {
+				if (mountedRef.current && runRef.current === run) setPhase(next);
+			},
+			onLevel: (rms) => {
+				if (mountedRef.current && runRef.current === run) levelRef.current = rms;
+			},
+			onTranscript: (text) => {
+				if (mountedRef.current && runRef.current === run) {
+					(questionTarget ?? appendRef.current)(text);
 				}
-			};
-			const source = ctx.createMediaStreamSource(stream);
-			sourceRef.current = source;
-			source.connect(worklet);
-			// Pull the graph with silence out (the worklet writes no output) —
-			// an unconnected worklet node is never clocked.
-			worklet.connect(ctx.destination);
-		} catch (e) {
-			if (gen !== genRef.current) return;
-			const msg =
-				e instanceof DOMException && (e.name === "NotAllowedError" || e.name === "SecurityError")
-					? "Microphone permission denied"
-					: e instanceof Error
-						? e.message
-						: "mic unavailable";
-			setError(msg);
-			cleanup();
-			return;
-		}
-		if (gen !== genRef.current) return;
-		let token: string;
-		try {
-			token = await tokenPromise;
-		} catch (e) {
-			if (gen !== genRef.current) return;
-			setError(e instanceof Error ? e.message : "token unavailable");
-			cleanup();
-			return;
-		}
-		if (gen !== genRef.current) return;
-		// Mitigation B: the handshake fires the moment the graph is live,
-		// overlapping any remaining token wait — mic-gated, never before it.
-		openSocket(gen, token);
-	}, [openSocket, cleanup]);
-
-	const stop = useCallback(() => {
-		const gen = genRef.current;
-		if (phase !== "recording" && phase !== "connecting") return;
-		setPhase("stopping");
-
-		// Mic dies FIRST — no more audio enqueues (dictate pattern). The
-		// per-run nodes die with it; the AudioContext stays (mitigation C).
-		for (const track of streamRef.current?.getTracks() ?? []) track.stop();
-		streamRef.current = null;
-		sourceRef.current?.disconnect();
-		sourceRef.current = null;
-		workletRef.current?.disconnect();
-		workletRef.current = null;
-
-		const ws = wsRef.current;
-		if (ws && ws.readyState === WebSocket.OPEN) {
-			try {
-				ws.send(JSON.stringify({ type: "CloseStream" }));
-			} catch {
-				cleanup();
-				return;
-			}
-			// Deepgram flushes remaining finals then closes; if it never
-			// does, the safety net ends the run anyway (dictate pattern).
-			safetyRef.current = setTimeout(() => {
-				if (gen === genRef.current) cleanup();
-			}, 3000);
-		} else {
-			cleanup();
-		}
-	}, [phase, cleanup]);
-
-	const cancel = useCallback(() => {
-		if (phase === "idle") return;
-		// Discard first, teardown second — cleanup() flushes, and the now-empty
-		// buffer makes that flush a no-op. Also kills a "stopping" run: the
-		// flush already underway is abandoned (its timer is cleared inside).
-		bufferRef.current = [];
-		cleanup();
-	}, [phase, cleanup]);
-
-	const finish = useCallback((): Promise<void> => {
-		return new Promise((resolve) => {
-			if (phase === "idle") {
-				resolve();
-				return;
-			}
-			waitersRef.current.push(resolve);
-			// "stopping" is already ending — the waiter just rides to cleanup.
-			if (phase === "recording" || phase === "connecting") stop();
+			},
+			onEnd: (reason) => {
+				if (runRef.current !== run) return;
+				runRef.current = null;
+				dictationActiveFlag = false;
+				if (mountedRef.current) {
+					setError(reason);
+					warmTokens.refresh();
+				}
+			},
 		});
-	}, [phase, stop]);
+		runRef.current = run;
+		dictationActiveFlag = true;
+		// No await here: the engine starts/resumes capture in the click stack.
+		run.start();
+	}, []);
 
-	// Publish finish() for the sibling subtrees (the pending question's
-	// dock) — registered for as long as this page owns the hook.
+	const stop = useCallback(() => { runRef.current?.stop(); }, []);
+	const cancel = useCallback(() => { runRef.current?.cancel(); }, []);
+	const finish = useCallback((): Promise<void> => {
+		const run = runRef.current;
+		if (!run) return Promise.resolve();
+		run.stop();
+		return run.finished;
+	}, []);
+	const toggle = useCallback(() => {
+		if (runRef.current) runRef.current.stop();
+		else start();
+	}, [start]);
+
 	useEffect(() => {
+		mountedRef.current = true;
 		dictationFinisher = finish;
+		warmTokens.refresh();
 		return () => {
+			// Navigation/Strict Mode teardown discards, never flushes into a
+			// departing page or the next page's newly registered target.
+			mountedRef.current = false;
 			if (dictationFinisher === finish) dictationFinisher = null;
+			runRef.current?.cancel();
 		};
 	}, [finish]);
-
-	const toggle = useCallback(() => {
-		if (phase === "idle") void start();
-		else if (phase === "recording" || phase === "connecting") stop();
-		// "stopping" presses are ignored — the flush is in flight.
-	}, [phase, start, stop]);
-
-	// Shortcut seams (keyboard wave A): ⌘D toggles from anywhere on the
-	// page; the Esc chain lands here as a CANCEL (owner, round 3). Each
-	// page owns ONE hook instance, and only the mounted page's listener is
-	// attached.
-	useEffect(() => {
-		warmTokens.refresh(); // pre-mint at mount (mitigation D) — silent if keyless
-	}, []);
 	useEffect(() => {
 		window.addEventListener("lh:kbd-toggle-dictation", toggle);
 		return () => window.removeEventListener("lh:kbd-toggle-dictation", toggle);
@@ -616,8 +386,8 @@ export function useDictation({ append }: { append: (text: string) => void }): Di
  *   idle      a wide, quiet "Dictate" button (mic + label, grayed out — the
  *             whole middle is the affordance, per the owner).
  *   active    optimistic from the CLICK: red stop pill + the fixed-width
- *             meter (no interim text ever shifts it). Spinner while
- *             Deepgram flushes the last final.
+ *             meter with a compact startup/listening/finishing status
+ *             (no interim transcript). Spinner while the last final flushes.
  *   error     the wide button again, label swapped for the failure reason
  *             (full text in the tooltip), cleared on the next click.
  */
@@ -630,7 +400,13 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 	 *  error keeps the old behavior (click = retry, which clears). */
 	const keyless = error === DICTATION_KEYLESS;
 	const [levels, setLevels] = useState<number[]>(() => new Array(METER_CELLS).fill(0));
-	const recording = phase === "recording" || phase === "stopping";
+	const stage = {
+		idle: "",
+		microphone: "Starting microphone…",
+		connecting: "Connecting…",
+		recording: "Listening…",
+		stopping: "Finishing…",
+	}[phase];
 	/** Adaptive cell count (owner round 2): derived from the meter's
 	 *  measured width — narrow rows show fewer bars instead of
 	 *  overflowing under neighbors. */
@@ -708,9 +484,7 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 	return (
 		<div className="flex w-full min-w-0 items-center gap-2" data-testid="dictation-bar">
 			<Hint
-				// The owner flagged this copy good ("Stop dictation (Esc)") —
-				// kept verbatim; only the machinery moved to the styled tooltip.
-				label="Stop dictation (Esc)"
+				label="Stop and keep transcription. Escape cancels and discards."
 				side="top"
 			>
 				<button
@@ -730,9 +504,12 @@ export function DictationBar({ dictation }: { dictation: Dictation }) {
 				</button>
 			</Hint>
 			<span className="size-1.5 shrink-0 animate-pulse rounded-full bg-destructive" aria-hidden />
-			{/* Fixed width while recording — nothing ever appends text beside it
-			    (no interims, owner round 1). Cells carry no minimum width; the
-			    COUNT adapts to the measured row space (owner round 2). */}
+			<span role="status" aria-live="polite" className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+				{stage}
+			</span>
+			{/* Only the stage label sits beside the meter — never interim text.
+			    Cells carry no minimum width; their count adapts to the remaining
+			    row space (owner round 2). */}
 			<div ref={meterRef} className="flex h-4 min-w-0 flex-1 items-center gap-[2px]" data-testid="dictation-meter">
 				{levels.slice(-cellCount).map((v, i) => (
 					<span

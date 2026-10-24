@@ -596,7 +596,7 @@ describe("teacher chat flow (scripted model)", () => {
 		assert.deepEqual(view2[1]!.parts.filter((p) => p.type !== "step-start").map((p) => p.type), ["reasoning", "text"], "think-first messages project identically");
 	});
 
-	it("an arrived-but-empty STREAMING message projects the thinking row; a settled empty one stays hidden (optimistic round 3)", () => {
+	it("an arrived-but-empty active message projects a working indicator, never an empty thinking panel", () => {
 		const emptyArrived: LhMessage = {
 			id: "a_empty",
 			role: "assistant",
@@ -607,14 +607,14 @@ describe("teacher chat flow (scripted model)", () => {
 			executions: new Map(),
 			inFlight: true,
 			streamingIds: new Set(["a_empty"]),
+			activeMessageId: "a_empty",
 		} as never;
-		// streaming: the message's ARRIVAL renders — one empty reasoning part
-		// (chat.tsx Reasoning isStreamings the last part: same spinner +
-		// shimmer as the placeholder it replaces — seamless handoff).
+		// One activity row replaces the initial placeholder. It has no
+		// collapsible body until the provider actually supplies readable text.
 		const view = projectView([{ id: "u0", role: "user", content: "hi", timestamp: 1 } as never, emptyArrived], live);
 		const parts = view[1]!.parts.filter((p) => p.type !== "step-start");
-		assert.deepEqual(parts.map((p) => p.type), ["reasoning"], "empty streaming message = the thinking row");
-		assert.equal(parts[0]!.text, "", "empty until the first token lands");
+		assert.deepEqual(parts.map((p) => p.type), ["data-agent-working"]);
+		assert.equal(parts[0]!.text, undefined, "activity is not an empty reasoning disclosure");
 		// settled (no live window): presentation-only, hidden as always.
 		const settled = projectView([{ id: "u0", role: "user", content: "hi", timestamp: 1 } as never, emptyArrived]);
 		assert.equal(settled.length, 1, "a settled empty message renders nothing");

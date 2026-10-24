@@ -1,6 +1,8 @@
 import {
 	clampThinkingLevel,
 	createModels,
+	InMemoryCredentialStore,
+	type CredentialStore,
 	getSupportedThinkingLevels,
 	type Api,
 	type Model,
@@ -45,18 +47,42 @@ export type { ThinkingLevel };
 
 let collection: ReturnType<typeof createModels> | undefined;
 
+// The composition root injects persistence; agents never import store adapters.
+// Delegation keeps already-built engines current after server initialization/HMR.
+const CREDENTIALS_KEY = Symbol.for("lh.modelCredentials");
+function credentialStore(): CredentialStore {
+	const root = globalThis as Record<symbol, CredentialStore | undefined>;
+	return root[CREDENTIALS_KEY] ??= new InMemoryCredentialStore();
+}
+export function configurePiCredentials(store: CredentialStore): void {
+	(globalThis as Record<symbol, CredentialStore>)[CREDENTIALS_KEY] = store;
+}
+const credentials: CredentialStore = {
+	read: (...args) => credentialStore().read(...args),
+	list: (...args) => credentialStore().list(...args),
+	modify: (...args) => credentialStore().modify(...args),
+	delete: (...args) => credentialStore().delete(...args),
+};
+
 /** The process-wide pi-ai Models collection — EVERY builtin provider's
  *  catalog (model slots wave, 2026-09-20): engines and the picker resolve
  *  against all of pi-ai's per-provider catalogs, so a settings slot can pin
  *  any native model id. Auth is resolved per request by pi-ai itself from
- *  the environment (the keys seam reflects file-saved keys into env), and
- *  a provider with no key simply fails its stream with "not configured" —
+ *  the environment (the keys seam reflects file-saved keys into env), or
+ *  the injected OAuth store for Copilot. A provider with no credentials
+ *  simply fails its stream with "not configured" —
  *  honest, late, and unreachable through the picker, which gates on
  *  keyPresent. */
 export function piModels() {
 	if (!collection) {
-		collection = createModels({ identity: APP_IDENTITY });
-		for (const provider of builtinProviders()) collection.setProvider(provider);
+		collection = createModels({ identity: APP_IDENTITY, credentials });
+		for (const provider of builtinProviders()) {
+			// Copilot is OAuth-only in LearnHarness. An ambient token must not
+			// silently keep a disconnected account usable.
+			collection.setProvider(provider.id === "github-copilot"
+				? { ...provider, auth: { oauth: provider.auth.oauth } }
+				: provider);
+		}
 	}
 	return collection;
 }
@@ -90,9 +116,8 @@ function defaultThinkingLevel(model: Model<Api>): ThinkingLevel {
 
 /** The production engine for a RESOLVED spec (model slots wave,
  *  2026-09-20): provider-aware catalog lookup + thinking clamp. The API
- *  key is resolved by pi-ai itself from the environment per request (the
- *  keys seam reflects file-saved keys into env), so the engine never
- *  hardcodes OpenRouter's. */
+ *  auth is resolved by pi-ai per request (environment API keys or the
+ *  injected Copilot OAuth store, including automatic refresh). */
 export function piEngineForSpec(spec: ResolvedModelSpec): PiEngine {
 	const models: Models = piModels();
 	const model = models.getModel(spec.provider, spec.id);

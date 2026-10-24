@@ -42,6 +42,13 @@ describe("hasProviderKey — the zero-keys pill's truth", () => {
 		assert.equal(hasProviderKey([status("DEEPGRAM_API_KEY", true)], PROVIDERS), false);
 	});
 
+	it("a connected Copilot account counts without an API key; old responses still work", () => {
+		assert.equal(hasProviderKey([], PROVIDERS, { connected: true }), true);
+		assert.equal(hasProviderKey([], PROVIDERS, { connected: false }), false);
+		assert.equal(hasProviderKey([], undefined), false);
+		assert.equal(hasProviderKey([status("ANTHROPIC_API_KEY", true)], PROVIDERS, { connected: false }), true);
+	});
+
 	it("absent provider keys = zero keys (the pill shows)", () => {
 		assert.equal(hasProviderKey([status("OPENROUTER_API_KEY", false)], PROVIDERS), false);
 		assert.equal(hasProviderKey([], PROVIDERS), false);
@@ -52,7 +59,7 @@ describe("ZeroKeysPill — the composer-hoisted notice", () => {
 	it("the pill takes the CTA's chrome with its own testid and copy", () => {
 		const html = renderToStaticMarkup(createElement(ZeroKeysPill, { onOpen: () => {} }));
 		assert.ok(html.includes('data-testid="setup-cta-keys"'));
-		assert.match(html, />Add a provider key<\/button>/);
+		assert.match(html, />Connect a provider<\/button>/);
 		assert.doesNotMatch(html, /chats start|—/);
 		// the models CTA's testid must not appear on the keys pill
 		assert.ok(!html.includes('data-testid="setup-cta"'));
@@ -76,8 +83,9 @@ describe("SetupKeysBody — stage 1's self-contained first-key screen", () => {
 		const html = renderToStaticMarkup(
 			createElement(SetupKeysBody, { ...base, providers: PROVIDERS, provider: null }),
 		);
-		assert.match(html, /Add a provider key\./);
-		assert.ok(html.includes("Choose your AI provider and paste its API key. You’ll pick your models next."));
+		assert.match(html, /Connect a provider\./);
+		assert.ok(html.includes("Add an API key or connect GitHub Copilot. You’ll pick your models next."));
+		assert.ok(html.includes("copilot-connection"));
 		assert.doesNotMatch(html, /First, add|keys unlock|—/);
 		assert.ok(html.includes('data-testid="setup-key-provider"'));
 		assert.ok(html.includes("Pick a provider…"));

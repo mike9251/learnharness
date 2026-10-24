@@ -9,6 +9,7 @@ import { describe, it } from "node:test";
 const source = fs.readFileSync(new URL("../scripts/build-server.mjs", import.meta.url), "utf8");
 const STANDALONE = path.join(".next", "standalone");
 const PROMPT = path.join("src", "agent", "system-prompt.md");
+const COPILOT_RUNTIME = path.join("node_modules", "@earendil-works", "pi-ai", "dist", "auth", "oauth", "github-copilot.js");
 
 function withPayload(test: (fixture: {
 	root: string;
@@ -27,6 +28,7 @@ function withPayload(test: (fixture: {
 		write(path.join(".next", "static", "runtime.js"));
 		write(path.join("public", "asset.txt"));
 		write(path.join(STANDALONE, PROMPT));
+		write(path.join(STANDALONE, COPILOT_RUNTIME), "export {};\n");
 		write(path.join(STANDALONE, "src", "agent", "prompts", "teacher", "20-teaching.md"));
 		test({ root, write, run: () => spawnSync(process.execPath, [path.join(root, "scripts", "build-server.mjs")], {
 			cwd: root, encoding: "utf8", timeout: 10_000,
@@ -75,7 +77,7 @@ describe("desktop standalone payload", () => {
 	});
 
 	it("still refuses leaked developer data or keys", () => {
-		for (const leaked of ["data/chat.json", "auth.json", ".env", ".env.local"]) {
+		for (const leaked of ["data/chat.json", "auth.json", "oauth.json", "oauth.json.tmp-123-test", "oauth.json.lock/owner", ".env", ".env.local"]) {
 			withPayload(({ write, run }) => {
 				write(path.join(STANDALONE, leaked));
 				const result = run();
@@ -83,6 +85,22 @@ describe("desktop standalone payload", () => {
 				assert.match(String(result.stderr), /REFUSING/);
 			});
 		}
+	});
+
+	it("refuses a lazy OAuth runtime with a missing transitive import", () => {
+		withPayload(({ write, run }) => {
+			write(path.join(STANDALONE, COPILOT_RUNTIME), 'import "../../utils/missing.js";\n');
+			const result = run();
+			assert.equal(result.status, 1);
+			assert.match(String(result.stderr), /OAuth runtime import failed/);
+		});
+	});
+
+	it("refuses a missing Copilot OAuth runtime", () => {
+		withPayload(({ root, run }) => {
+			fs.rmSync(path.join(root, STANDALONE, COPILOT_RUNTIME));
+			assert.equal(run().status, 1);
+		});
 	});
 
 	it("still refuses a missing runtime prompt asset", () => {

@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import type { AuthKeyStatus } from "@/src/core";
+import type { AuthKeyStatus, CopilotStatus } from "@/src/core";
 import { classifyKeys, type ProviderKeyInfo } from "@/components/settings/keys-section";
 import { useModelCatalog } from "@/components/model-picker";
 import type { ModelCatalogResponse } from "@/src/core";
@@ -30,8 +30,9 @@ import { useSettingsSaved } from "@/components/settings-signal";
 export function hasProviderKey(
 	statuses: readonly AuthKeyStatus[],
 	providers: readonly ProviderKeyInfo[] | undefined,
+	copilot?: CopilotStatus,
 ): boolean {
-	return classifyKeys(statuses, providers).providerRows.some((s) => s.present);
+	return copilot?.connected === true || classifyKeys(statuses, providers).providerRows.some((s) => s.present);
 }
 
 /** The zero-keys truth for the calling page: TRUE only after a
@@ -43,9 +44,12 @@ export function useZeroKeys(): boolean {
 	const [zeroKeys, setZeroKeys] = useState(false);
 	const read = useCallback(() => {
 		fetch("/api/keys")
-			.then((r) => r.json())
-			.then((body: { keys?: AuthKeyStatus[]; providers?: ProviderKeyInfo[] }) => {
-				setZeroKeys(!hasProviderKey(body.keys ?? [], body.providers));
+			.then((r) => {
+				if (!r.ok) throw new Error("Could not load credentials");
+				return r.json();
+			})
+			.then((body: { keys?: AuthKeyStatus[]; providers?: ProviderKeyInfo[]; copilot?: CopilotStatus }) => {
+				setZeroKeys(!hasProviderKey(body.keys ?? [], body.providers, body.copilot));
 			})
 			.catch(() => {});
 	}, []);
@@ -69,7 +73,7 @@ export function ZeroKeysPill({ onOpen, inline = false }: { onOpen: () => void; i
 			onClick={onOpen}
 			className="rounded-sm border border-border bg-card px-3 py-1.5 font-ui text-xs text-foreground transition-colors hover:border-muted-foreground/50 hover:bg-accent cursor-pointer"
 		>
-			Add a provider key
+			Connect a provider
 		</button>
 	);
 	return inline ? button : <div className="pointer-events-auto mb-2 flex justify-center">{button}</div>;

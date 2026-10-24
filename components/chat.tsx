@@ -14,7 +14,7 @@ import {
 	ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
-import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
+import { AgentReasoning, AgentWorking, hasAgentThinkingIndicator, useAgentReasoningDisclosures } from "@/components/agent-reasoning";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { BrailleSpinner } from "@/components/braille-spinner";
 import { LiveToolCard } from "@/components/artifacts/live-tool-card";
@@ -26,6 +26,7 @@ import { Composer } from "@/components/composer";
 import { useEnterSubmits } from "@/components/enter-submits";
 import { blurAfterPointerClick } from "@/components/focus-hygiene";
 import { dockStateKey } from "@/components/dock-state-key";
+import { dockFormHeight, routeDockWheel } from "@/components/dock-scroll";
 import { QueuedSteersBody, type QueuedSteerLine } from "@/components/queued-steers";
 import { DictationBar, finishDictation, joinDictation, useDictation } from "@/components/dictation";
 import { useFieldCycle } from "@/components/field-cycle";
@@ -242,6 +243,7 @@ export function Chat({
 	const sessionFindScopeRef = useRef<HTMLDivElement | null>(null);
 	const scrollContextRef = useRef<StickToBottomContext | null>(null);
 	const sourceTextParts = useMemo(() => firstSourceTextParts(messages), [messages]);
+	const reasoningDisclosureProps = useAgentReasoningDisclosures(chatId);
 
 	// The reattach settled terminal → the sync-and-continue seam (below).
 	setReattachSettled(() => reattachSettledRef.current());
@@ -1438,7 +1440,6 @@ export function Chat({
 									<Message from="assistant" className="max-w-full">
 									<MessageContent className="w-full">
 											{m.parts.map((part, pi) => {
-												const isLastPart = mi === messages.length - 1 && pi === m.parts.length - 1;
 												// The step boundary where teaching begins (round 8): when
 												// the teach flip happens in a LATER step, its PhaseDivider
 												// replaces this boundary's plain hairline.
@@ -1477,12 +1478,9 @@ export function Chat({
 														);
 													}
 													case "reasoning":
-														return (
-															<Reasoning key={pi} isStreaming={status === "streaming" && isLastPart} className="mb-2">
-																<ReasoningTrigger />
-																<ReasoningContent>{part.text ?? ""}</ReasoningContent>
-															</Reasoning>
-														);
+														return <AgentReasoning key={part.id} part={part} {...reasoningDisclosureProps(part)} />;
+													case "data-agent-working":
+														return <AgentWorking key={part.id} />;
 													case "step-start":
 														if (teachBoundary)
 															return <PhaseDivider key={`teach-step-${pi}`} phase="teach" />;
@@ -1543,10 +1541,10 @@ export function Chat({
 							    answer, session start, reattach (status flips to
 							    submitted SYNCHRONOUSLY with the action) — until the
 							    turn's first APPLIED event, where the stream takes over
-							    with the same look: an arrived-but-empty message renders
-							    the thinking ROW (view.ts projects one empty reasoning
-							    part), so submitted ⟺ placeholder and streaming ⟺ a
-							    rendered row, mutually exclusive by construction.
+							    with the same look: an arrived-but-empty message projects
+							    a non-expandable working row. An active projected working
+							    or readable reasoning row suppresses this placeholder even
+							    during transient status/reattachment overlaps.
 							    Protocol events (agent_start) apply nothing and release
 							    nothing — the placeholder covers the whole
 							    provider-connect gap. turnInFlight: the same state
@@ -1563,13 +1561,8 @@ export function Chat({
 									<Shimmer duration={1}>COMPACTING CONTEXT…</Shimmer>
 								</span>
 							)}
-							{(status === "submitted" || turnInFlight) && (
-								<span className="flex items-center gap-2 font-ui text-xs font-medium uppercase tracking-wide text-muted-foreground">
-									<BrailleSpinner label="Thinking" />
-									<Shimmer duration={1}>
-										THINKING…
-									</Shimmer>
-								</span>
+							{(status === "submitted" || turnInFlight) && !hasAgentThinkingIndicator(messages) && (
+								<AgentWorking />
 							)}
 							{error && (
 								<div className="rounded-lg border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm">
@@ -1995,23 +1988,53 @@ function DockOverlay({
 	// round 2): the scroller reserves symmetric gutters (scrollbar-gutter:
 	// stable both-edges), so inset the overlay's right edge by the gutter —
 	// zero on macOS overlay scrollbars, the real width on classic platforms.
-	// The same measure owns the QUESTION/PROBLEM HEIGHT CAP (owner round,
-	// 2026-10-05): the old fixed fractions (55dvh / 40vh) cut long problems
-	// off absurdly short — the cap is now the AVAILABLE COLUMN (the
-	// scroller already starts below the top bar) minus a 2rem breathing
-	// gap, carried as --dock-max-h for the docks' scroll areas.
+	// Budget the WHOLE form, not just its question text. The previous cap
+	// forgot every control below/around the question, letting the overlay
+	// extend above the visible session. Subtract measured outside chrome;
+	// the form separately subtracts its thinking/confidence/submit controls.
 	const [sbInset, setSbInset] = useState(0);
 	const [dockMaxH, setDockMaxH] = useState<number | null>(null);
-	useEffect(() => {
+	const [dockViewportH, setDockViewportH] = useState<number | null>(null);
+	const [dockLineH, setDockLineH] = useState(0);
+	// At extreme zoom/short heights, outside chrome can consume the entire
+	// form budget. Scroll the whole dock frame rather than hiding the form.
+	const scrollDockFrame = expanded && (!!pending || !!practice) && dockMaxH !== null && dockMaxH <= dockLineH;
+	useIsoLayoutEffect(() => {
 		const el = scrollRef.current;
-		if (!el) return;
+		const block = blockRef.current;
+		const shell = shellRef.current;
+		if (!el || !block || !shell) return;
+		el.dataset.testid = "session-scroll-viewport";
+		let viewportWidth = el.clientWidth;
+		let viewportHeight = el.clientHeight;
 		const measure = () => {
+			// Height-only resizes also clamp scrollTop. They are geometry, not
+			// an intentional departure into history (width was already muted).
+			if (el.clientWidth !== viewportWidth || el.clientHeight !== viewportHeight) {
+				geometryAtRef.current = Date.now();
+				viewportWidth = el.clientWidth;
+				viewportHeight = el.clientHeight;
+			}
 			setSbInset(Math.round((el.offsetWidth - el.clientWidth) / 2));
-			setDockMaxH(Math.max(el.clientHeight - 32, 160));
+			// scrollHeight remains the natural content extent even in the
+			// whole-frame fallback; offsetHeight would create a sizing loop.
+			setDockMaxH(Math.floor(dockFormHeight(el.clientHeight, block.scrollHeight, shell.clientHeight)));
+			setDockViewportH(Math.max(0, el.clientHeight - 32));
+			const proseStyle = getComputedStyle(block.querySelector(".lh-prose") ?? block);
+			setDockLineH(Number.parseFloat(proseStyle.lineHeight) || Number.parseFloat(proseStyle.fontSize) || 0);
 		};
 		measure();
+		const ro = new ResizeObserver(measure);
+		ro.observe(el);
+		ro.observe(block);
+		if (block.firstElementChild) ro.observe(block.firstElementChild);
+		ro.observe(shell);
 		window.addEventListener("resize", measure);
-		return () => window.removeEventListener("resize", measure);
+		return () => {
+			ro.disconnect();
+			window.removeEventListener("resize", measure);
+			delete el.dataset.testid;
+		};
 	}, [scrollRef]);
 
 	// GROWTH MUTE (owner round, 2026-10-05 — the generation churn): during a
@@ -2037,29 +2060,15 @@ function DockOverlay({
 		return () => ro.disconnect();
 	}, [scrollRef]);
 
-	// Wheel over the dock must still scroll the transcript (owner, scroll
-	// round 2): the overlay is a SIBLING of the scroller, so the browser's
-	// native scroll chaining stops at the overlay (the old in-flow dock
-	// chained for free). Internal scrollers — the question area, textarea
-	// overflow, the model menus — keep native scrolling, including their
-	// own edge chaining; only when nothing under the cursor can take the
-	// delta do we forward it to the transcript.
+	// Expanded question/problem panels own their wheel input at BOTH edges.
+	// Forwarding their overscroll to history used to collapse the current
+	// question while the learner was trying to read it. Other dock variants
+	// retain transcript forwarding; actual nested scrollers stay native.
 	useEffect(() => {
 		const root = blockRef.current;
 		const el = scrollRef.current;
 		if (!root || !el) return;
-		const canScroll = (n: HTMLElement, dir: number) => {
-			if (n.scrollHeight - n.clientHeight < 2) return false; // not scrollable
-			return dir < 0 ? n.scrollTop > 0 : n.scrollTop < n.scrollHeight - n.clientHeight - 0.5;
-		};
-		const onWheel = (e: WheelEvent) => {
-			if (e.deltaY === 0) return;
-			for (let n = e.target as HTMLElement | null; n && n !== root; n = n.parentElement) {
-				if (n instanceof HTMLElement && canScroll(n, e.deltaY)) return; // native
-			}
-			e.preventDefault();
-			el.scrollTop += e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1);
-		};
+		const onWheel = (event: WheelEvent) => routeDockWheel(event, root, el);
 		root.addEventListener("wheel", onWheel, { passive: false });
 		return () => root.removeEventListener("wheel", onWheel);
 	}, [scrollRef]);
@@ -2255,7 +2264,16 @@ function DockOverlay({
 	return (
 		<div className="pointer-events-none absolute inset-x-0 bottom-0" style={{ right: sbInset }}>
 			<div className="h-24 bg-gradient-to-t from-background via-background/85 to-transparent" />
-			<div ref={blockRef} className="relative bg-background pb-5" style={{ "--dock-max-h": dockMaxH ? `${dockMaxH}px` : undefined } as React.CSSProperties}>
+			<div
+				ref={blockRef}
+				data-dock-surface={scrollDockFrame ? "" : undefined}
+				data-dock-frame-scroll={scrollDockFrame ? "" : undefined}
+				className={`relative bg-background pb-5${scrollDockFrame ? " pointer-events-auto overflow-y-auto overscroll-contain" : ""}`}
+				style={{
+					"--dock-max-h": dockMaxH !== null ? `${scrollDockFrame ? dockViewportH : dockMaxH}px` : undefined,
+					maxHeight: scrollDockFrame && dockViewportH !== null ? `${dockViewportH}px` : undefined,
+				} as React.CSSProperties}
+			>
 				<div className={DOCK}>
 					{setupCta}
 					{/* The queued-steer indicator (owner spec 2026-10-03): quiet
@@ -2284,7 +2302,7 @@ function DockOverlay({
 							claim={revealPending}
 						/>
 					)}
-					<div ref={shellRef} className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
+					<div ref={shellRef} data-testid="dock-shell" className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
 						<div
 						ref={contentRef}
 						key={mode}
